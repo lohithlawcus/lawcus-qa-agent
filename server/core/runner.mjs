@@ -37,7 +37,16 @@ export async function executeRun({
   const proposals = openProposals(db, audit);
   mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
   try {
-    browser = await chromium.launch({ headless: true, chromiumSandbox: true });
+    // V5 section 17: "Use headed mode for interactive local runs when
+    // useful." Headless remains the default (and is what every automated
+    // test relies on); QA_HEADED=1 opens a visible, slowed-down window so
+    // the operator can watch a local run.
+    const headed = process.env.QA_HEADED === "1";
+    browser = await chromium.launch({
+      headless: !headed,
+      chromiumSandbox: true,
+      ...(headed ? { slowMo: 350 } : {}),
+    });
     for (const scenario of plan.scenarios) {
       const id = randomUUID();
       const started = Date.now();
