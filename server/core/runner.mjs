@@ -2,7 +2,13 @@ import { chromium } from "playwright";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { Plan, descriptions, isAllowedRequest, canHeal } from "./contracts.mjs";
+import {
+  Plan,
+  descriptions,
+  isAllowedRequest,
+  evaluateLocatorCandidate,
+} from "./contracts.mjs";
+import { openProposals } from "./proposals.mjs";
 import { now } from "./store.mjs";
 const aliases = ["Sign in", "Log in", "Login"];
 export async function executeRun({
@@ -26,7 +32,8 @@ export async function executeRun({
   let label = old?.buttonName || "Sign in";
   let browser;
   let failed = 0;
-  let repaired = 0;
+  let proposed = 0;
+  const proposals = openProposals(db, audit);
   mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
   try {
     browser = await chromium.launch({ headless: true, chromiumSandbox: true });
@@ -38,7 +45,6 @@ export async function executeRun({
       let status = "passed";
       let actual = descriptions[scenario].expected;
       let candidate = label;
-      let healed = false;
       let screenshotName;
       let traceName;
       try {
@@ -150,24 +156,42 @@ export async function executeRun({
                 );
             }
           }
-          healed =
-            candidate !== label &&
-            canHeal({
-              sameAssertion: true,
-              uniqueCandidate: true,
-              knownAlias: aliases.includes(candidate),
-              postconditionPassed: true,
+          // V5 Step 1 — automatic trusted locator repair is removed.
+          // A candidate locator now produces a LOCATOR_REPAIR proposal and the
+          // trusted path is left exactly as it was. `label` is NOT reassigned.
+          const candidacy = evaluateLocatorCandidate({
+            current: label,
+            candidate,
+            sameAssertion: true,
+            uniqueCandidate: true,
+            knownAlias: aliases.includes(candidate),
+            postconditionPassed: true,
+          });
+          if (candidacy.proposalWarranted) {
+            proposed++;
+            proposals.create({
+              type: "LOCATOR_REPAIR",
+              summary: `Login submit control resolved by the alias “${candidate}” instead of the trusted “${label}”.`,
+              trigger: `locator_alias_resolved during scenario ${scenario}`,
+              subjectKind: "locator",
+              subjectId: "login.submit",
+              proposedValue: candidate,
+              evidence: [
+                { runId, scenario, resolvedBy: "known_semantic_alias" },
+              ],
+              confidence: candidacy.confidence,
+              risk: "medium",
+              impactedTests: [scenario],
+              requiredApproverRole: "engineering",
+              generatedBy: "runner",
+              runId,
             });
-          if (healed) {
-            repaired++;
-            audit("path.technical-repair", runId, {
+            audit("proposal.locator-repair.raised", runId, {
               from: label,
               to: candidate,
               scenario,
-              reason:
-                "A unique known semantic alias passed the unchanged login assertion.",
+              note: "Trusted locator unchanged pending operator approval.",
             });
-            label = candidate;
           }
         }
       } catch {
@@ -229,7 +253,7 @@ export async function executeRun({
         descriptions[scenario].expected,
         actual,
         Date.now() - started,
-        healed ? 1 : 0,
+        0, // Step 1: runs never record an automatic repair.
       );
       for (const [kind, name] of [
         ["screenshot", screenshotName],
@@ -270,13 +294,13 @@ export async function executeRun({
         audit("path.saved", pathId, { runbookId: book.id, version });
       }
     }
-    const summary = `${plan.scenarios.length} checks completed. ${plan.scenarios.length - failed} passed. ${failed} need review.${repaired ? ` ${repaired} technical repair confirmed.` : ""} ${run.replay ? "Saved execution path reused." : "First execution."} No model calls during execution. Local test application only.`;
+    const summary = `${plan.scenarios.length} checks completed. ${plan.scenarios.length - failed} passed. ${failed} need review.${proposed ? ` ${proposed} locator repair proposal awaiting approval.` : ""} ${run.replay ? "Saved execution path reused." : "First execution."} No model calls during execution. Local test application only.`;
     db.prepare(
       "UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?",
     ).run(failed ? "failed" : "passed", now(), summary, runId);
     audit("run.completed", runId, {
       failed,
-      repaired,
+      proposed,
       checks: plan.scenarios.length,
     });
   } catch {

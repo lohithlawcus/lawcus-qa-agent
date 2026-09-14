@@ -10,7 +10,7 @@ import {
   builtInPlan,
   validateExecution,
   isAllowedRequest,
-  canHeal,
+  evaluateLocatorCandidate,
 } from "../core/contracts.mjs";
 import { openStore, now } from "../core/store.mjs";
 test("English login intents produce bounded, explicit scenarios", () => {
@@ -88,16 +88,26 @@ test("Network policy rejects external, metadata, encoded, credentialed and destr
     assert.equal(isAllowedRequest(url, method, origin), false);
   assert.equal(isAllowedRequest(origin + "/login", "POST", origin), true);
 });
-test("Healing requires unchanged assertion, a unique known alias and a successful postcondition", () => {
+test("A locator-repair proposal requires an unchanged assertion, a unique known alias, a successful postcondition and a genuinely different candidate — and never authorizes auto-apply", () => {
   const good = {
+    current: "css=#old-locator",
+    candidate: "css=#new-locator",
     sameAssertion: true,
     uniqueCandidate: true,
     knownAlias: true,
     postconditionPassed: true,
   };
-  assert.equal(canHeal(good), true);
-  for (const key of Object.keys(good))
-    assert.equal(canHeal({ ...good, [key]: false }), false);
+  assert.equal(evaluateLocatorCandidate(good).proposalWarranted, true);
+  assert.equal(evaluateLocatorCandidate(good).autoApplyPermitted, false);
+  for (const key of ["sameAssertion", "uniqueCandidate", "knownAlias", "postconditionPassed"])
+    assert.equal(
+      evaluateLocatorCandidate({ ...good, [key]: false }).proposalWarranted,
+      false,
+    );
+  assert.equal(
+    evaluateLocatorCandidate({ ...good, candidate: good.current }).proposalWarranted,
+    false,
+  );
 });
 test("Persistence migrates once, enforces one active run and marks crash leftovers interrupted", () => {
   const dir = mkdtempSync(join(tmpdir(), "qa-store-"));
@@ -128,7 +138,7 @@ test("Persistence migrates once, enforces one active run and marks crash leftove
     ({ db } = openStore(dir));
     assert.equal(
       db.prepare("SELECT count(*) n FROM schema_migrations").get().n,
-      3,
+      4,
     );
     assert.equal(
       db.prepare("SELECT status FROM runs").get().status,

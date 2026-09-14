@@ -72,23 +72,35 @@ test(
       fixture.state.label = "Log in";
       const repaired = await run();
       assert.equal(repaired.status, "passed");
+      // V5 Step 1: a candidate locator no longer rewrites the trusted path —
+      // it raises a LOCATOR_REPAIR proposal and the trusted path is untouched.
       assert.equal(
         db.prepare("SELECT count(*) n FROM execution_paths").get().n,
-        2,
+        1,
+      );
+      assert.equal(
+        db
+          .prepare("SELECT count(*) n FROM scenario_results WHERE run_id=? AND healed=1")
+          .get(repaired.id).n,
+        0,
       );
       assert.ok(
         db
           .prepare(
-            "SELECT count(*) n FROM scenario_results WHERE run_id=? AND healed=1",
+            "SELECT count(*) n FROM proposals WHERE run_id=? AND type='LOCATOR_REPAIR' AND status='pending_review'",
           )
           .get(repaired.id).n > 0,
+      );
+      assert.equal(
+        db.prepare("SELECT count(*) n FROM trusted_versions").get().n,
+        0,
       );
       fixture.state.acceptInvalid = true;
       const defect = await run();
       assert.equal(defect.status, "failed");
       assert.equal(
         db.prepare("SELECT count(*) n FROM execution_paths").get().n,
-        2,
+        1,
       );
       assert.ok(
         db

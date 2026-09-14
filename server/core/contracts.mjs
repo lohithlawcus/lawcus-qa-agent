@@ -149,11 +149,30 @@ export function isAllowedRequest(url, method, origin) {
     return false;
   }
 }
-export function canHeal({
+// V5 Step 1: this function no longer authorizes a repair. It only decides
+// whether a candidate is worth PROPOSING to a human. Nothing in the runtime may
+// promote a locator on the strength of this result alone.
+export function evaluateLocatorCandidate({
+  current,
+  candidate,
   sameAssertion,
   uniqueCandidate,
   knownAlias,
   postconditionPassed,
 }) {
-  return sameAssertion && uniqueCandidate && knownAlias && postconditionPassed;
+  const signals = {
+    sameAssertion: Boolean(sameAssertion),
+    uniqueCandidate: Boolean(uniqueCandidate),
+    knownAlias: Boolean(knownAlias),
+    postconditionPassed: Boolean(postconditionPassed),
+  };
+  const met = Object.values(signals).filter(Boolean).length;
+  return {
+    proposalWarranted:
+      candidate !== current && Object.values(signals).every(Boolean),
+    confidence: met / 4,
+    signals,
+    // Explicit: approval is a human transition, never a runtime one.
+    autoApplyPermitted: false,
+  };
 }
