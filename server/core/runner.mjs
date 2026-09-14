@@ -49,6 +49,7 @@ export async function executeRun({
   runId,
   origin,
   artifactDirectory,
+  signal,
 }) {
   const run = db.prepare("SELECT * FROM runs WHERE id=?").get(runId);
   const book = db
@@ -63,7 +64,17 @@ export async function executeRun({
   const old = previous ? JSON.parse(previous.fingerprint) : null;
   let label = old?.buttonName || "Sign in";
   let browser;
-  let failed = 0;
+  // V5 Step 6 / section 16 — a "failure" is no longer one undifferentiated
+  // bucket. blockedCount: the check itself couldn't be verified (an
+  // environment/evidence problem, not a behavioral result) — a required
+  // blocked check can never produce overall PASS. reviewCount: a genuine
+  // behavioral mismatch, which V1 already always turns into a clarification
+  // question rather than asserting "this is definitely a defect" — so the
+  // honest run-level status for that is needs_review, not a flat failed.
+  let blockedCount = 0;
+  let reviewCount = 0;
+  let completedScenarios = 0;
+  let cancelled = false;
   let proposed = 0;
   const proposals = openProposals(db, audit);
   const testbook = openTestBook(db, audit);
@@ -84,6 +95,16 @@ export async function executeRun({
       ...(headed ? { slowMo: 350 } : {}),
     });
     for (const scenario of plan.scenarios) {
+      // Cooperative cancellation, checked between scenarios rather than
+      // mid-Playwright-action: aborting live browser work partway through
+      // an action has no clean, universal primitive in Playwright and risks
+      // leaving a context in an inconsistent state. The scenario already in
+      // flight finishes (or times out on its own existing timeouts); no
+      // scenario_results row is fabricated for one that never started.
+      if (signal?.aborted) {
+        cancelled = true;
+        break;
+      }
       const id = randomUUID();
       const started = Date.now();
       let context;
@@ -167,7 +188,7 @@ export async function executeRun({
           }
         }
       } catch {
-        failed++;
+        reviewCount++;
         status = "failed";
         actual =
           "The expected login behavior was not observed, or the page could not be resolved safely. The expected result has been preserved.";
@@ -211,8 +232,11 @@ export async function executeRun({
         }
       }
       if ((!screenshotName || !traceName) && status === "passed") {
-        failed++;
-        status = "failed";
+        // An evidence-save failure is an infrastructure problem, not a
+        // behavioral result — section 16: distinct from a genuine failure,
+        // and a required blocked check can never produce overall PASS.
+        blockedCount++;
+        status = "blocked";
         actual =
           "The browser assertion completed, but required evidence could not be saved. This check is not counted as passed.";
       }
@@ -248,8 +272,29 @@ export async function executeRun({
             name,
             now(),
           );
+      completedScenarios++;
     }
-    if (!failed) {
+    if (cancelled) {
+      const summary = `Run cancelled by the operator after ${completedScenarios} of ${plan.scenarios.length} checks. No result is claimed for the checks that had not started.`;
+      db.prepare(
+        "UPDATE runs SET status='cancelled',finished_at=?,summary=? WHERE id=?",
+      ).run(now(), summary, runId);
+      audit("run.cancelled", runId, {
+        completed: completedScenarios,
+        total: plan.scenarios.length,
+      });
+      return;
+    }
+    // A required blocked check can never produce overall PASS (section 16);
+    // a genuine behavioral failure is needs_review, not a flat failed —
+    // V1 already treats every such failure as a clarification question, not
+    // an assertion that the product is definitely broken.
+    const overallStatus = blockedCount
+      ? "blocked"
+      : reviewCount
+        ? "needs_review"
+        : "passed";
+    if (overallStatus === "passed") {
       if (!old || old.buttonName !== label) {
         const pathId = randomUUID();
         const version =
@@ -274,12 +319,15 @@ export async function executeRun({
         audit("path.saved", pathId, { runbookId: book.id, version });
       }
     }
-    const summary = `${plan.scenarios.length} checks completed. ${plan.scenarios.length - failed} passed. ${failed} need review.${proposed ? ` ${proposed} locator repair proposal awaiting approval.` : ""} ${run.replay ? "Saved execution path reused." : "First execution."} No model calls during execution. Local test application only.`;
+    const passedCount = plan.scenarios.length - blockedCount - reviewCount;
+    const summary = `${plan.scenarios.length} checks completed. ${passedCount} passed.${reviewCount ? ` ${reviewCount} need review.` : ""}${blockedCount ? ` ${blockedCount} blocked (evidence could not be saved).` : ""}${proposed ? ` ${proposed} locator repair proposal awaiting approval.` : ""} ${run.replay ? "Saved execution path reused." : "First execution."} No model calls during execution. Local test application only.`;
     db.prepare(
       "UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?",
-    ).run(failed ? "failed" : "passed", now(), summary, runId);
+    ).run(overallStatus, now(), summary, runId);
     audit("run.completed", runId, {
-      failed,
+      status: overallStatus,
+      blocked: blockedCount,
+      needsReview: reviewCount,
       proposed,
       checks: plan.scenarios.length,
     });

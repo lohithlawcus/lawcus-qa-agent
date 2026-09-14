@@ -185,7 +185,11 @@ export function openTestBook(db, audit) {
           "SELECT id FROM test_definition_versions WHERE test_case_id=? AND version=?",
         )
         .get(testCase.id, testCase.current_version);
-      return { testCaseId: testCase.id, versionId: version?.id ?? null };
+      return {
+        testCaseId: testCase.id,
+        version: testCase.current_version,
+        versionId: version?.id ?? null,
+      };
     },
 
     /** Links pre-existing scenario_results rows (written before the

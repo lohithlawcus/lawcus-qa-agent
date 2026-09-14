@@ -81,6 +81,25 @@ export function openStore(directory) {
       db.exec("COMMIT");
     } catch (error) { db.exec("ROLLBACK"); throw error; }
   }
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=6").get()) {
+    // This migration rebuilds `runs` (SQLite can't ALTER a CHECK
+    // constraint in place) while other tables still hold rows referencing
+    // it. PRAGMA foreign_keys is a documented no-op inside a pending
+    // transaction, so it must be toggled here, outside BEGIN/COMMIT.
+    db.exec("PRAGMA foreign_keys=OFF");
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(readFileSync(new URL("../migrations/006_execution_manifest.sql", import.meta.url), "utf8"));
+      db.prepare("INSERT INTO schema_migrations VALUES(6,?)").run(now());
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    db.exec("PRAGMA foreign_keys=ON");
+    const inconsistent = db.prepare("PRAGMA foreign_key_check").all();
+    if (inconsistent.length)
+      throw new Error(
+        `Migration 6 left inconsistent foreign keys: ${JSON.stringify(inconsistent)}`,
+      );
+  }
   const stale = db.prepare("SELECT id FROM runs WHERE status='running'").all();
   db.prepare(
     "UPDATE runs SET status='interrupted',finished_at=?,summary='The runner stopped before this run completed. Review the partial results before running again.' WHERE status='running'",

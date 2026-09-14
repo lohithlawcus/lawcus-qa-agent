@@ -22,6 +22,7 @@ import {
 import { executeRun, loginTestCases } from "./core/runner.mjs";
 import { openProposals } from "./core/proposals.mjs";
 import { openTestBook } from "./core/testbook.mjs";
+import { buildRunManifest, ManifestError } from "./core/manifest.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -57,6 +58,10 @@ testbook.backfillHistory(
 // is a stable, non-spoofable identity for every decision made here.
 const approverIdentity = `operator:${userInfo().username}`;
 const artifactDirectory = join(directory, "artifacts");
+// V5 Step 6 — in-flight runs' cancellation controllers, keyed by run id.
+// Only fixture/DSL-based runs are cancellable this way (they're the only
+// ones that check a signal); an entry exists only while its run is active.
+const activeRuns = new Map();
 const sessions = new Map();
 const allowedOrigins = new Set(["http://127.0.0.1:5173"]);
 const limits = new Map();
@@ -107,6 +112,16 @@ function runDetail(id) {
     clarifications: db
       .prepare("SELECT * FROM clarifications WHERE run_id=?")
       .all(id),
+    // Frozen at run creation (section 15); absent for runs from before
+    // Step 6 and for the legacy Lawcus live-runner path, which doesn't use
+    // the DSL/primitive registry this manifest describes.
+    manifest: (() => {
+      const row = db
+        .prepare("SELECT manifest FROM run_execution_manifests WHERE run_id=?")
+        .get(id);
+      return row ? JSON.parse(row.manifest) : null;
+    })(),
+    cancellable: activeRuns.has(id),
   };
 }
 const server = createServer(
@@ -313,6 +328,37 @@ const server = createServer(
           });
           return;
         }
+        // V5 Step 6 / section 15 — resolve and freeze the execution
+        // manifest BEFORE the run exists at all: if any scenario's DSL
+        // references a primitive that isn't approved and hash-matching, or
+        // isn't yet synced into the TestBook, the run must not start rather
+        // than fail partway through. The legacy Lawcus live-runner doesn't
+        // use the DSL/primitive registry, so it has no manifest.
+        let manifest = null;
+        if (book.environment_id === "fixture") {
+          try {
+            manifest = buildRunManifest({
+              testbook,
+              testCases: Object.fromEntries(
+                Object.entries(loginTestCases).map(([key, entry]) => [
+                  key,
+                  entry.definition,
+                ]),
+              ),
+              scenarios: JSON.parse(book.definition).scenarios,
+              environmentId: book.environment_id,
+              requestedIntent: book.intent,
+              requester: approverIdentity,
+              triggerSource: input.idempotencyKey ? "operator-run" : "replay",
+            });
+          } catch (error) {
+            if (error instanceof ManifestError) {
+              json(res, 409, { error: error.message });
+              return;
+            }
+            throw error;
+          }
+        }
         const id = randomUUID();
         const previous = db
           .prepare(
@@ -330,20 +376,52 @@ const server = createServer(
           now(),
           input.idempotencyKey,
         );
+        if (manifest)
+          db.prepare(
+            "INSERT INTO run_execution_manifests(run_id,manifest,created_at) VALUES(?,?,?)",
+          ).run(id, JSON.stringify(manifest), now());
         audit("run.started", id, { runbookId: book.id, replay: !!previous });
-        const execute=book.environment_id==='lawcus'?runLive:executeRun;
+        const execute = book.environment_id === "lawcus" ? runLive : executeRun;
+        const controller = book.environment_id === "fixture" ? new AbortController() : null;
+        if (controller) activeRuns.set(id, controller);
         void execute({
           db,
           audit,
           runId: id,
           origin: fixture.origin,
           artifactDirectory,
-        }).catch(() => {
-          db.prepare(
-            "UPDATE runs SET status='interrupted',finished_at=?,summary='Execution stopped unexpectedly.' WHERE id=?",
-          ).run(now(), id);
-        });
+          ...(controller ? { signal: controller.signal } : {}),
+        })
+          .finally(() => activeRuns.delete(id))
+          .catch(() => {
+            db.prepare(
+              "UPDATE runs SET status='interrupted',finished_at=?,summary='Execution stopped unexpectedly.' WHERE id=?",
+            ).run(now(), id);
+          });
         json(res, 202, { id });
+        return;
+      }
+      const cancel = /^\/runs\/([a-f0-9-]{36})\/cancel$/.exec(pathname);
+      if (req.method === "POST" && cancel) {
+        const run = db.prepare("SELECT status FROM runs WHERE id=?").get(cancel[1]);
+        if (!run) {
+          json(res, 404, { error: "Run not found." });
+          return;
+        }
+        if (run.status !== "running") {
+          json(res, 409, { error: "This run has already finished." });
+          return;
+        }
+        const controller = activeRuns.get(cancel[1]);
+        if (!controller) {
+          json(res, 409, {
+            error: "This run cannot be cancelled (not a cancellable fixture run).",
+          });
+          return;
+        }
+        controller.abort();
+        audit("run.cancel-requested", cancel[1], {});
+        json(res, 202, { status: "cancel-requested" });
         return;
       }
       const detail = /^\/runs\/([a-f0-9-]{36})$/.exec(pathname);

@@ -669,10 +669,17 @@ p {
   border-color: #cbe1d4 !important;
 }
 .status.failed,
-.status.interrupted {
+.status.interrupted,
+.status.blocked,
+.status.needs_review {
   background: #fff4e8 !important;
   color: #976121 !important;
   border-color: #f0d8b8 !important;
+}
+.status.cancelled {
+  background: #f1f4f7 !important;
+  color: #536b81 !important;
+  border-color: #dce5ee !important;
 }
 .result-icon {
   width: 26px;

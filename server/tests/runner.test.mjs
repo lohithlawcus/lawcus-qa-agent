@@ -97,7 +97,9 @@ test(
       );
       fixture.state.acceptInvalid = true;
       const defect = await run();
-      assert.equal(defect.status, "failed");
+      // V5 Step 6 / section 16: a genuine behavioral failure that opens a
+      // clarification question is needs_review, not a flat failed.
+      assert.equal(defect.status, "needs_review");
       assert.equal(
         db.prepare("SELECT count(*) n FROM execution_paths").get().n,
         1,
@@ -114,6 +116,56 @@ test(
         ),
         builtInPlan("Test login"),
       );
+    } finally {
+      await new Promise((r) => fixture.server.close(r));
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+test(
+  "Real Chromium: an already-cancelled signal stops the run before any scenario executes",
+  { timeout: 60000 },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qa-runner-cancel-"));
+    const { db, audit } = openStore(dir);
+    const fixture = await startFixture(0);
+    const book = randomUUID();
+    db.prepare("INSERT INTO runbooks VALUES(?,?,?,?,?,?,?,?)").run(
+      book,
+      1,
+      "fixture",
+      "Login essentials",
+      "Test login",
+      "built-in",
+      JSON.stringify(builtInPlan("Test login")),
+      now(),
+    );
+    const runId = randomUUID();
+    db.prepare(
+      "INSERT INTO runs(id,runbook_id,status,replay,started_at) VALUES(?,?,?,?,?)",
+    ).run(runId, book, "running", 0, now());
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      await executeRun({
+        db,
+        audit,
+        runId,
+        origin: fixture.origin,
+        artifactDirectory: join(dir, "artifacts"),
+        signal: controller.signal,
+      });
+      const run = db.prepare("SELECT * FROM runs WHERE id=?").get(runId);
+      assert.equal(run.status, "cancelled");
+      assert.equal(
+        db.prepare("SELECT count(*) n FROM scenario_results WHERE run_id=?").get(runId).n,
+        0,
+      );
+      const auditEvent = db
+        .prepare("SELECT * FROM audit_events WHERE action='run.cancelled' AND entity_id=?")
+        .get(runId);
+      assert.ok(auditEvent);
     } finally {
       await new Promise((r) => fixture.server.close(r));
       db.close();

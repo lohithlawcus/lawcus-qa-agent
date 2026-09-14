@@ -123,6 +123,17 @@ type State = {
   audit: { id: string; action: string; created_at: string }[];
   planner: string;
 };
+type Manifest = {
+  version: number;
+  environmentId: string;
+  requestedIntent: string;
+  requester: string;
+  triggerSource: string;
+  runnerRevision: string | null;
+  testCases: { scenario: string; externalId: string; version: number }[];
+  primitives: { id: string; version: number }[];
+  createdAt: string;
+};
 type Detail = Run & {
   results: {
     id: string;
@@ -135,6 +146,8 @@ type Detail = Run & {
   }[];
   artifacts: { id: string; scenario_result_id: string; kind: string }[];
   clarifications: Question[];
+  manifest: Manifest | null;
+  cancellable: boolean;
 };
 type Plan = {
   id: string;
@@ -270,6 +283,16 @@ export default function Home() {
       setDetail(await request<Detail>("/runs/" + id));
       setPlan(null);
       setTab("workspace");
+    });
+  }
+  async function cancelRun(id: string) {
+    await action(async () => {
+      await request(`/runs/${id}/cancel`, {});
+      setMessage(
+        "Cancellation requested. The check in progress finishes; the rest are skipped.",
+      );
+      if (detail?.id === id) setDetail(await request<Detail>("/runs/" + id));
+      await refresh();
     });
   }
   async function decide(id: string, verb: "approve" | "reject") {
@@ -504,16 +527,30 @@ export default function Home() {
                         <span className="section-label">RUN REPORT</span>
                         <h2>{detail.title}</h2>
                       </div>
-                      <Badge className={"status " + detail.status}>
-                        {detail.status === "running" ? (
-                          <LoaderCircle className="spin" />
-                        ) : detail.status === "passed" ? (
-                          <Check />
-                        ) : (
-                          <AlertTriangle />
+                      <div className="inline">
+                        {detail.status === "running" && detail.cancellable && (
+                          <Button
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => cancelRun(detail.id)}
+                          >
+                            <X size={14} />
+                            Cancel
+                          </Button>
                         )}
-                        {detail.status}
-                      </Badge>
+                        <Badge className={"status " + detail.status}>
+                          {detail.status === "running" ? (
+                            <LoaderCircle className="spin" />
+                          ) : detail.status === "passed" ? (
+                            <Check />
+                          ) : detail.status === "cancelled" ? (
+                            <X />
+                          ) : (
+                            <AlertTriangle />
+                          )}
+                          {detail.status.replaceAll("_", " ")}
+                        </Badge>
+                      </div>
                     </div>
                     <p className="report-summary" aria-live="polite">
                       {detail.status === "running"
@@ -566,6 +603,21 @@ export default function Home() {
                         </div>
                       ))}
                     </div>
+                    {detail.manifest && (
+                      <div className="small-note">
+                        Exact versions used: {detail.manifest.testCases
+                          .map((c) => `${c.externalId} v${c.version}`)
+                          .join(", ")}{" "}
+                        · primitives{" "}
+                        {detail.manifest.primitives
+                          .map((p) => `${p.id} v${p.version}`)
+                          .join(", ")}
+                        {detail.manifest.runnerRevision
+                          ? ` · runner ${detail.manifest.runnerRevision}`
+                          : ""}{" "}
+                        · requested by {detail.manifest.requester}
+                      </div>
+                    )}
                     {detail.status !== "running" && (
                       <Button
                         variant="outline"
