@@ -9,6 +9,7 @@ import {
   evaluateLocatorCandidate,
 } from "./contracts.mjs";
 import { openProposals } from "./proposals.mjs";
+import { resolvePrimitive } from "./primitives.mjs";
 import { now } from "./store.mjs";
 const aliases = ["Sign in", "Log in", "Login"];
 export async function executeRun({
@@ -72,88 +73,61 @@ export async function executeRun({
         });
         page = await context.newPage();
         page.on("dialog", (dialog) => void dialog.dismiss());
-        await page.goto(`${origin}/login`, { waitUntil: "domcontentloaded" });
-        const email = page.getByRole("textbox", {
-          name: "Email address",
-          exact: true,
-        });
-        const password = page.getByLabel("Password", { exact: true });
-        if ((await email.count()) !== 1 || (await password.count()) !== 1)
-          throw new Error("The login fields could not be identified uniquely.");
-        const resolveButton = async () => {
-          const matches = [];
-          for (const name of aliases) {
-            const loc = page.getByRole("button", { name, exact: true });
-            if ((await loc.count()) > 1)
-              throw new Error("The sign-in action is ambiguous.");
-            if (
-              (await loc.count()) === 1 &&
-              (await loc.isVisible()) &&
-              (await loc.isEnabled())
-            )
-              matches.push(name);
-          }
-          if (matches.length !== 1)
-            throw new Error(
-              "The sign-in action could not be identified uniquely.",
-            );
-          candidate = matches[0];
-          return page.getByRole("button", { name: candidate, exact: true });
-        };
+        // V5 Step 3 — every browser action/assertion below runs through the
+        // Approved Primitive Registry (server/core/primitives.mjs) instead of
+        // inline Playwright code. resolvePrimitive() fails closed on any
+        // unknown, unapproved or tampered implementation.
+        await resolvePrimitive("auth.open_login_page").run({ page, origin });
+        const { email, password } = await resolvePrimitive(
+          "auth.ensure_login_fields",
+        ).run({ page });
         if (scenario === "password_masked") {
-          if ((await password.getAttribute("type")) !== "password")
-            throw new Error("The password field is no longer concealed.");
+          await resolvePrimitive("auth.assert_password_masked").run({
+            password,
+          });
         } else if (scenario === "empty_fields") {
-          await (await resolveButton()).click();
-          const required =
-            (await email.getAttribute("required")) !== null &&
-            (await password.getAttribute("required")) !== null;
-          const invalid = await email.evaluate((e) => !e.checkValidity());
-          if (
-            !required ||
-            !invalid ||
-            new URL(page.url()).pathname !== "/login"
-          )
-            throw new Error(
-              "Empty credentials were not stopped by the required-field checks.",
-            );
+          const resolved = await resolvePrimitive(
+            "auth.resolve_submit_control",
+          ).run({ page, aliases });
+          await resolved.locator.click();
+          await resolvePrimitive("auth.assert_empty_fields_blocked").run({
+            page,
+            email,
+            password,
+          });
         } else {
-          await email.fill("qa@example.test");
-          await password.fill(
-            scenario === "invalid_password"
-              ? "Incorrect-fixture-value"
-              : "Fixture-only-123!",
-          );
-          await (await resolveButton()).click();
+          await resolvePrimitive("auth.fill_credentials").run({
+            email,
+            password,
+            credentials: {
+              email: "qa@example.test",
+              password:
+                scenario === "invalid_password"
+                  ? "Incorrect-fixture-value"
+                  : "Fixture-only-123!",
+            },
+          });
+          const resolved = await resolvePrimitive(
+            "auth.resolve_submit_control",
+          ).run({ page, aliases });
+          candidate = resolved.candidate;
+          await resolved.locator.click();
           if (scenario === "invalid_password") {
-            await page
-              .getByRole("alert")
-              .filter({ hasText: "Invalid email or password" })
-              .waitFor();
-            await page.goto(`${origin}/workspace`);
-            if (new URL(page.url()).pathname !== "/login")
-              throw new Error(
-                "The protected workspace was accessible after invalid credentials.",
-              );
+            await resolvePrimitive(
+              "auth.assert_invalid_credentials_rejected",
+            ).run({ page });
+            await resolvePrimitive("auth.assert_protected_route_blocked").run(
+              { page, origin },
+            );
           } else {
-            await page
-              .getByRole("heading", { name: "Welcome, QA user", exact: true })
-              .waitFor();
+            await resolvePrimitive("auth.assert_authenticated_workspace").run(
+              { page },
+            );
             if (scenario === "logout") {
-              await page
-                .getByRole("button", { name: "Sign out", exact: true })
-                .click();
-              await page
-                .getByRole("heading", {
-                  name: "Sign in to your workspace",
-                  exact: true,
-                })
-                .waitFor();
-              await page.goto(`${origin}/workspace`);
-              if (new URL(page.url()).pathname !== "/login")
-                throw new Error(
-                  "The protected workspace stayed accessible after sign out.",
-                );
+              await resolvePrimitive("auth.logout").run({ page });
+              await resolvePrimitive(
+                "auth.assert_protected_route_blocked",
+              ).run({ page, origin });
             }
           }
           // V5 Step 1 — automatic trusted locator repair is removed.
