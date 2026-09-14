@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import {
   Plan,
@@ -136,9 +137,12 @@ test("Persistence migrates once, enforces one active run and marks crash leftove
     );
     db.close();
     ({ db } = openStore(dir));
+    const migrationFileCount = readdirSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "migrations"),
+    ).filter((f) => f.endsWith(".sql")).length;
     assert.equal(
       db.prepare("SELECT count(*) n FROM schema_migrations").get().n,
-      6,
+      migrationFileCount,
     );
     assert.equal(
       db.prepare("SELECT status FROM runs").get().status,

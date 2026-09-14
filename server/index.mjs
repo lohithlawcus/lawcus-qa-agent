@@ -23,6 +23,7 @@ import { executeRun, loginTestCases } from "./core/runner.mjs";
 import { openProposals } from "./core/proposals.mjs";
 import { openTestBook } from "./core/testbook.mjs";
 import { buildRunManifest, ManifestError } from "./core/manifest.mjs";
+import { resolveIntent } from "./core/intent.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -257,13 +258,27 @@ const server = createServer(
       if (req.method === "POST" && pathname === "/plans") {
         const input = PlanRequest.parse(await body(req));
         if(planning){json(res,409,{error:'A plan is already being created.'});return;}
+        // V5 Step 7 / section 32 — resolve known phrasing locally before
+        // ever considering an AI call. The "standard" planner never
+        // interprets intent at all (it's an explicit fixed-checks choice),
+        // so there's nothing to route.
+        const routed =
+          input.planner === "standard"
+            ? null
+            : resolveIntent({
+                intent: input.intent,
+                testbook,
+                environmentId: input.environmentId,
+              });
         let result;
         planning=true;
         try {
           result = input.environmentId==='lawcus'
             ? input.planner==='standard'
               ? {plan:{title:'Login essentials',scenarios:['password_masked','empty_fields','valid_login','logout']},source:'standard',modelCalls:0}
-              : await planWithAI(input.intent)
+              : routed?.matched
+                ? {plan:{title:'Login essentials',scenarios:routed.scenarios},source:'intent-router',modelCalls:0}
+                : await planWithAI(input.intent)
             : await createPlan(input.intent);
         } finally {planning=false;}
         const id = randomUUID();
@@ -277,6 +292,24 @@ const server = createServer(
           JSON.stringify(result.plan),
           now(),
         );
+        if (routed)
+          db.prepare(
+            `INSERT INTO intent_resolutions(
+               id,runbook_id,original_prompt,normalized_intent,resolved_locally,
+               confidence,matched_feature_id,matched_suite_id,matched_case_ids,created_at)
+             VALUES(?,?,?,?,?,?,?,?,?,?)`,
+          ).run(
+            randomUUID(),
+            id,
+            input.intent,
+            routed.normalizedIntent,
+            routed.matched ? 1 : 0,
+            routed.confidence,
+            routed.featureId,
+            routed.suiteId,
+            JSON.stringify(routed.caseIds),
+            now(),
+          );
         audit("runbook.created", id, {
           source: result.source,
           modelCalls: result.modelCalls,

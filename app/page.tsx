@@ -641,7 +641,15 @@ export default function Home() {
                       </Badge>
                     </div>
                     <p className="subtle">
-                      {environment === "lawcus" ? `Review these staging expectations before running. ${plan.source === "standard" ? "This is a fixed plan created without AI." : "OpenAI selected checks from the bounded login contract."}` : "These checks use the synthetic local login contract."}
+                      {environment === "lawcus"
+                        ? `Review these staging expectations before running. ${
+                            plan.source === "standard"
+                              ? "This is a fixed plan created without AI."
+                              : plan.source === "intent-router"
+                                ? "Recognized as a known request — matched to approved coverage locally, without an AI call."
+                                : "OpenAI selected checks from the bounded login contract."
+                          }`
+                        : "These checks use the synthetic local login contract."}
                     </p>
                     <div className="scenario-list">
                       {plan.scenarios.map((s, i) => (
