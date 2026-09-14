@@ -4,7 +4,7 @@ import {randomBytes} from 'node:crypto';
 import {publicIPv4,startEgress} from '../core/egress.mjs';
 import {permitLiveRequest,STAGING,API_ORIGIN,ASSETS} from '../core/live-runner.mjs';
 import {sealEvidence,openEvidence,CredentialSetup} from '../core/setup.mjs';
-import {createAIPlanner} from '../core/ai-planner.mjs';
+import {createOpenAIProvider} from '../ai/providers/openai.mjs';
 
 test('Staging blocks other tenants, metadata, credentialed URLs and business writes',()=>{
  for(const [url,method,type='fetch'] of [
@@ -38,7 +38,8 @@ test('Encrypted evidence round-trips and rejects tampering, wrong keys and trunc
 });
 const valid={title:'Login essentials',scenarios:['valid_login'],summary:'Check dedicated account login.',clarification:''};
 function plannerFor(plan,status='completed',http=200,onRequest=()=>{}){
- return createAIPlanner({getSecret:async()=> 'synthetic-api-key',request:async(url,options)=>{onRequest(url,options);return new Response(JSON.stringify({status,output:[{content:[{type:'output_text',text:JSON.stringify(plan)}]}],usage:{input_tokens:10,output_tokens:20}}),{status:http});}});
+ const provider=createOpenAIProvider({getSecret:async()=> 'synthetic-api-key',request:async(url,options)=>{onRequest(url,options);return new Response(JSON.stringify({status,output:[{content:[{type:'output_text',text:JSON.stringify(plan)}]}],usage:{input_tokens:10,output_tokens:20}}),{status:http});}});
+ return (intent)=>provider.planLogin({intent},{model:'gpt-4.1-mini'});
 }
 test('AI planning sends only intent and fixed contract, then returns a bounded plan',async()=>{
  const result=await plannerFor(valid,'completed',200,(url,options)=>{
@@ -65,6 +66,6 @@ test('Credential input rejects missing values and arbitrary credential names',()
 
 
 test('AI billing diagnostics distinguish known codes without exposing provider messages',async()=>{
- const planner=createAIPlanner({getSecret:async()=> 'synthetic-api-key',request:async()=>new Response(JSON.stringify({error:{code:'credit_balance_exhausted',message:'Sensitive provider account details'}}),{status:429})});
- await assert.rejects(planner('Test login'),error=>error.message.includes('credits are exhausted')&&!error.message.includes('Sensitive'));
+ const provider=createOpenAIProvider({getSecret:async()=> 'synthetic-api-key',request:async()=>new Response(JSON.stringify({error:{code:'credit_balance_exhausted',message:'Sensitive provider account details'}}),{status:429})});
+ await assert.rejects(provider.planLogin({intent:'Test login'},{model:'gpt-4.1-mini'}),error=>error.message.includes('credits are exhausted')&&!error.message.includes('Sensitive'));
 });

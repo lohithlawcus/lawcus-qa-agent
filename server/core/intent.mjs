@@ -26,9 +26,9 @@ const KNOWN_PATTERNS = [
 
 // Live Lawcus staging never authorizes invalid_password by default —
 // account lockout limits aren't confirmed (same policy already enforced in
-// ai-planner.mjs and live-runner.mjs's negativeAllowed=false). The
-// TestBook's case list doesn't know about that environment-specific
-// restriction, so the router applies it explicitly.
+// server/ai/providers/openai.mjs's and live-runner.mjs's
+// negativeAllowed=false). The TestBook's case list doesn't know about that
+// environment-specific restriction, so the router applies it explicitly.
 const EXTERNAL_ID_TO_SCENARIO = {
   "auth.password_masked": "password_masked",
   "auth.empty_fields": "empty_fields",

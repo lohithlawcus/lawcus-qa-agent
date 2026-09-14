@@ -1,5 +1,6 @@
 import {runLive,checkBrowser,liveDescriptions,connectInBrowser} from './core/live-runner.mjs';
-import {planWithAI} from './core/ai-planner.mjs';
+import { createModelRouter, recordModelUsage } from './ai/router.mjs';
+import { createOpenAIProvider } from './ai/providers/openai.mjs';
 import {keychain} from './core/secrets.mjs';
 import {openEvidence} from './core/setup.mjs';
 import {readFile} from 'node:fs/promises';
@@ -32,6 +33,13 @@ const fixture = await startFixture();
 const { db, audit } = openStore(directory);
 const proposals = openProposals(db, audit);
 const testbook = openTestBook(db, audit);
+// V5 Step 8 — the only place that knows which provider/model handles which
+// task (server/ai/router.mjs's TASK_POLICY). Only OpenAI is registered:
+// adding a second provider means writing one more server/ai/providers/*
+// module and one more line here, never touching a call site.
+const modelRouter = createModelRouter({
+  providers: { openai: createOpenAIProvider() },
+});
 // V5 Step 5 — make sure the Authentication / login-essentials cases exist
 // (and are on their current version) before the first request, not only
 // after the first run; then link any pre-TestBook history by scenario name.
@@ -270,6 +278,10 @@ const server = createServer(
                 testbook,
                 environmentId: input.environmentId,
               });
+        // Generated before planning (not after) so a real AI call can be
+        // attributed to the runbook it produced (server/ai/router.mjs
+        // records model_usage against this id).
+        const id = randomUUID();
         let result;
         planning=true;
         try {
@@ -278,10 +290,9 @@ const server = createServer(
               ? {plan:{title:'Login essentials',scenarios:['password_masked','empty_fields','valid_login','logout']},source:'standard',modelCalls:0}
               : routed?.matched
                 ? {plan:{title:'Login essentials',scenarios:routed.scenarios},source:'intent-router',modelCalls:0}
-                : await planWithAI(input.intent)
+                : await modelRouter.run('planLogin', { intent: input.intent, negativeAllowed: false })
             : await createPlan(input.intent);
         } finally {planning=false;}
-        const id = randomUUID();
         db.prepare("INSERT INTO runbooks VALUES(?,?,?,?,?,?,?,?)").run(
           id,
           1,
@@ -292,6 +303,7 @@ const server = createServer(
           JSON.stringify(result.plan),
           now(),
         );
+        recordModelUsage(db, { result, runbookId: id });
         if (routed)
           db.prepare(
             `INSERT INTO intent_resolutions(
