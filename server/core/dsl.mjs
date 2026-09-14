@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { resolvePrimitive } from "./primitives.mjs";
 
 // V5 section 11 — Safe Test DSL. A test case is strictly validated data: a
@@ -65,6 +67,21 @@ export function parseTestCase(yamlText) {
         .join("; ")}`,
     );
   return result.data;
+}
+
+// Loads every *.yaml file in a directory as a DSL test case, keyed by
+// filename (without extension). Keeps both the raw source (needed to
+// version a case in the TestBook, Step 5) and its parsed, validated
+// definition. Fails closed the same way parseTestCase() does — a malformed
+// file here fails the caller's startup rather than being skipped.
+export function loadTestCaseDirectory(dirPath) {
+  const entries = {};
+  for (const file of readdirSync(dirPath).filter((f) => f.endsWith(".yaml"))) {
+    const key = file.replace(/\.yaml$/, "");
+    const source = readFileSync(join(dirPath, file), "utf8");
+    entries[key] = { source, definition: parseTestCase(source) };
+  }
+  return entries;
 }
 
 const REFERENCE = /^\$\{([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)\}$/;

@@ -19,8 +19,9 @@ import {
   validateExecution,
   descriptions,
 } from "./core/contracts.mjs";
-import { executeRun } from "./core/runner.mjs";
+import { executeRun, loginTestCases } from "./core/runner.mjs";
 import { openProposals } from "./core/proposals.mjs";
+import { openTestBook } from "./core/testbook.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -28,6 +29,28 @@ mkdirSync(directory, { recursive: true, mode: 0o700 });
 const fixture = await startFixture();
 const { db, audit } = openStore(directory);
 const proposals = openProposals(db, audit);
+const testbook = openTestBook(db, audit);
+// V5 Step 5 — make sure the Authentication / login-essentials cases exist
+// (and are on their current version) before the first request, not only
+// after the first run; then link any pre-TestBook history by scenario name.
+testbook.syncCases({
+  featureName: "Authentication",
+  featureDescription:
+    "Sign in, sign out, and session behavior for the Lawcus workspace.",
+  suiteName: "login-essentials",
+  suiteDescription:
+    "The five bounded login checks currently automated against the local fixture.",
+  priority: "normal",
+  entries: loginTestCases,
+});
+testbook.backfillHistory(
+  Object.fromEntries(
+    Object.entries(loginTestCases).map(([scenario, entry]) => [
+      scenario,
+      entry.definition.id,
+    ]),
+  ),
+);
 // section 14: only an interactive operator identity may approve or reject —
 // never the runner, AI planner, recorder or network observer. This service
 // is single-operator (one Mac, one local session), so the OS account name
@@ -205,6 +228,7 @@ const server = createServer(
             )
             .all(),
           proposals: proposals.inbox("pending_review"),
+          testbook: testbook.tree(),
           audit: db
             .prepare(
               "SELECT * FROM audit_events ORDER BY sequence DESC LIMIT 30",

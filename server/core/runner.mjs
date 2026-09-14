@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, unlinkSync, readFileSync } from "node:fs";
+import { mkdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -10,25 +10,23 @@ import {
   evaluateLocatorCandidate,
 } from "./contracts.mjs";
 import { openProposals } from "./proposals.mjs";
-import { parseTestCase, runTestCase } from "./dsl.mjs";
+import { loadTestCaseDirectory, runTestCase } from "./dsl.mjs";
+import { openTestBook } from "./testbook.mjs";
 import { now } from "./store.mjs";
 const aliases = ["Sign in", "Log in", "Login"];
 
-// V5 Step 4 — each scenario's primitive sequence is now declarative DSL
+// V5 Step 4 — each scenario's primitive sequence is declarative DSL
 // (server/dsl/login/*.yaml, validated by server/core/dsl.mjs) instead of
-// hardcoded control flow here. Loaded and schema-validated once at module
-// load: an invalid or malformed test case definition fails the service
-// startup rather than failing mid-run.
-const dslDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dsl", "login");
-const loadCase = (name) =>
-  parseTestCase(readFileSync(join(dslDir, `${name}.yaml`), "utf8"));
-const testCases = {
-  password_masked: loadCase("password_masked"),
-  empty_fields: loadCase("empty_fields"),
-  valid_login: loadCase("valid_login"),
-  invalid_password: loadCase("invalid_password"),
-  logout: loadCase("logout"),
-};
+// hardcoded control flow. Loaded and schema-validated once at module load:
+// an invalid or malformed test case definition fails service startup
+// rather than failing mid-run. Exported (with raw source) so the TestBook
+// (Step 5) can sync from the exact same entries without a second read.
+export const loginTestCases = loadTestCaseDirectory(
+  join(dirname(fileURLToPath(import.meta.url)), "..", "dsl", "login"),
+);
+const testCases = Object.fromEntries(
+  Object.entries(loginTestCases).map(([key, entry]) => [key, entry.definition]),
+);
 // Only these scenarios resolve a candidate submit control worth evaluating
 // for a LOCATOR_REPAIR proposal (password_masked/empty_fields never submit).
 const LOCATOR_EVALUATED_SCENARIOS = new Set([
@@ -36,6 +34,15 @@ const LOCATOR_EVALUATED_SCENARIOS = new Set([
   "invalid_password",
   "logout",
 ]);
+const TESTBOOK_FEATURE = {
+  featureName: "Authentication",
+  featureDescription:
+    "Sign in, sign out, and session behavior for the Lawcus workspace.",
+  suiteName: "login-essentials",
+  suiteDescription:
+    "The five bounded login checks currently automated against the local fixture.",
+  priority: "normal",
+};
 export async function executeRun({
   db,
   audit,
@@ -59,6 +66,11 @@ export async function executeRun({
   let failed = 0;
   let proposed = 0;
   const proposals = openProposals(db, audit);
+  const testbook = openTestBook(db, audit);
+  // Cheap and idempotent (a handful of hash comparisons against 5 cases) —
+  // safe to run every executeRun call so both real usage and tests always
+  // exercise the full TestBook linkage, not just a one-time startup sync.
+  testbook.syncCases({ ...TESTBOOK_FEATURE, entries: loginTestCases });
   mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
   try {
     // V5 section 17: "Use headed mode for interactive local runs when
@@ -204,7 +216,13 @@ export async function executeRun({
         actual =
           "The browser assertion completed, but required evidence could not be saved. This check is not counted as passed.";
       }
-      db.prepare("INSERT INTO scenario_results VALUES(?,?,?,?,?,?,?,?,?)").run(
+      const linked = testbook.resolveCurrentDefinition(testCases[scenario].id);
+      db.prepare(
+        `INSERT INTO scenario_results(
+           id,run_id,scenario,title,status,expected,actual,duration_ms,healed,
+           test_case_id,test_definition_version_id)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+      ).run(
         id,
         runId,
         scenario,
@@ -214,6 +232,8 @@ export async function executeRun({
         actual,
         Date.now() - started,
         0, // Step 1: runs never record an automatic repair.
+        linked?.testCaseId ?? null,
+        linked?.versionId ?? null,
       );
       for (const [kind, name] of [
         ["screenshot", screenshotName],

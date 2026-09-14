@@ -138,7 +138,7 @@ test("Persistence migrates once, enforces one active run and marks crash leftove
     ({ db } = openStore(dir));
     assert.equal(
       db.prepare("SELECT count(*) n FROM schema_migrations").get().n,
-      4,
+      5,
     );
     assert.equal(
       db.prepare("SELECT status FROM runs").get().status,

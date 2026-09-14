@@ -21,6 +21,7 @@ import {
   Globe,
   RotateCcw,
   Inbox,
+  ListChecks,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -78,12 +79,47 @@ type Proposal = {
   created_at: string;
   expires_at: string;
 };
+type CaseStats = {
+  executions: number;
+  passed: number;
+  failed: number;
+  lastExecutionAt: string | null;
+  lastStatus: string | null;
+  lastPassAt: string | null;
+  lastFailureAt: string | null;
+};
+type TestCase = {
+  id: string;
+  externalId: string;
+  title: string;
+  description: string;
+  layer: string;
+  priority: string;
+  risk: string;
+  status: string;
+  tags: string[];
+  currentVersion: number;
+  stats: CaseStats;
+};
+type TestSuite = {
+  id: string;
+  name: string;
+  description: string;
+  cases: TestCase[];
+};
+type Feature = {
+  id: string;
+  name: string;
+  description: string;
+  suites: TestSuite[];
+};
 type State = {
   environments: { id: string; name: string; url: string }[];
   runbooks: Book[];
   runs: Run[];
   clarifications: Question[];
   proposals: Proposal[];
+  testbook: Feature[];
   audit: { id: string; action: string; created_at: string }[];
   planner: string;
 };
@@ -304,6 +340,10 @@ export default function Home() {
               <BookOpen />
               Saved tests
             </TabsTrigger>
+            <TabsTrigger value="testbook">
+              <ListChecks />
+              TestBook
+            </TabsTrigger>
             <TabsTrigger value="history">
               <History />
               Run history
@@ -335,26 +375,30 @@ export default function Home() {
                   ? "What would you like to test?"
                   : tab === "saved"
                     ? "Your reusable tests"
-                    : tab === "history"
-                      ? "Every run, accounted for"
-                      : tab === "proposals"
-                        ? "Nothing changes without your say"
-                        : tab === "safety"
-                          ? "Confidence needs evidence"
-                          : "Connect your test environment"}
+                    : tab === "testbook"
+                      ? "The record of what's actually proven"
+                      : tab === "history"
+                        ? "Every run, accounted for"
+                        : tab === "proposals"
+                          ? "Nothing changes without your say"
+                          : tab === "safety"
+                            ? "Confidence needs evidence"
+                            : "Connect your test environment"}
               </h1>
               <p>
                 {tab === "workspace"
                   ? "Describe the intent. Review the checks. Let the runner handle the steps."
                   : tab === "saved"
                     ? "Saved logical tests stay separate from their browser execution paths."
-                    : tab === "history"
-                      ? "Results and evidence are retained, including failed and interrupted runs."
-                      : tab === "proposals"
-                        ? "A candidate change to a locator or test never applies itself. Review the evidence, then approve or reject."
-                        : tab === "safety"
-                          ? "A bounded first version, with clear limits and no silent changes to expected behavior."
-                          : "Start with an isolated test application, then verify your Lawcus staging access."}
+                    : tab === "testbook"
+                      ? "Feature → suite → test case, each on a versioned definition, with its real execution history."
+                      : tab === "history"
+                        ? "Results and evidence are retained, including failed and interrupted runs."
+                        : tab === "proposals"
+                          ? "A candidate change to a locator or test never applies itself. Review the evidence, then approve or reject."
+                          : tab === "safety"
+                            ? "A bounded first version, with clear limits and no silent changes to expected behavior."
+                            : "Start with an isolated test application, then verify your Lawcus staging access."}
               </p>
             </div>
             <div className="connection">
@@ -702,6 +746,62 @@ export default function Home() {
                       <Play />
                       Run test
                     </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          </TabsContent>
+          <TabsContent value="testbook">
+            <div className="panel">
+              {!state?.testbook.length ? (
+                <div className="empty-small">
+                  <ListChecks />
+                  <h2>No test cases yet</h2>
+                  <p>
+                    Run a login check once and the TestBook fills in on its
+                    own — nothing to set up by hand.
+                  </p>
+                </div>
+              ) : (
+                state.testbook.map((feature) => (
+                  <div key={feature.id} className="testbook-feature">
+                    <span className="section-label">{feature.name}</span>
+                    <p className="subtle">{feature.description}</p>
+                    {feature.suites.map((suite) => (
+                      <div key={suite.id}>
+                        <h3>{suite.name}</h3>
+                        <p className="subtle">{suite.description}</p>
+                        {suite.cases.map((testCase) => (
+                          <div className="list-row" key={testCase.id}>
+                            <div>
+                              <h3>{testCase.title}</h3>
+                              <div className="inline">
+                                <Badge variant="outline">{testCase.layer}</Badge>
+                                <Badge variant="outline">{testCase.risk} risk</Badge>
+                                <Badge variant="outline">v{testCase.currentVersion}</Badge>
+                                <Badge variant="outline">{testCase.status}</Badge>
+                              </div>
+                              <span className="subtle">
+                                {testCase.stats.executions} execution
+                                {testCase.stats.executions === 1 ? "" : "s"} ·{" "}
+                                {testCase.stats.passed} passed ·{" "}
+                                {testCase.stats.failed} failed
+                                {testCase.stats.lastExecutionAt
+                                  ? ` · last run ${date(testCase.stats.lastExecutionAt)}`
+                                  : ""}
+                              </span>
+                            </div>
+                            <Badge
+                              className={
+                                "status " + (testCase.stats.lastStatus || "")
+                              }
+                            >
+                              {testCase.stats.lastStatus ?? "not yet run"}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
                   </div>
                 ))
               )}
