@@ -22,6 +22,8 @@ import {
   RotateCcw,
   Inbox,
   ListChecks,
+  Lightbulb,
+  Network,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -113,6 +115,29 @@ type Feature = {
   description: string;
   suites: TestSuite[];
 };
+type KnowledgeItem = {
+  id: string;
+  semantic_id: string;
+  version: number;
+  type: string;
+  feature_name: string;
+  title: string;
+  statement: string;
+  does_not_mean: string | null;
+  provenance: string;
+  source_id: string | null;
+  status: string;
+  created_at: string;
+};
+type KnowledgeEdge = {
+  id: string;
+  type: string;
+  from_feature: string;
+  to_feature: string;
+  rationale: string;
+  status: string;
+};
+type KnowledgeFeatureGroup = { feature: string; items: KnowledgeItem[] };
 type State = {
   environments: { id: string; name: string; url: string }[];
   runbooks: Book[];
@@ -120,6 +145,8 @@ type State = {
   clarifications: Question[];
   proposals: Proposal[];
   testbook: Feature[];
+  knowledgeInbox: { items: KnowledgeItem[]; edges: KnowledgeEdge[] };
+  knowledgeApproved: KnowledgeFeatureGroup[];
   audit: { id: string; action: string; created_at: string }[];
   planner: string;
 };
@@ -312,6 +339,28 @@ export default function Home() {
       await refresh();
     });
   }
+  async function decideKnowledge(
+    kind: "items" | "edges",
+    id: string,
+    verb: "approve" | "reject",
+  ) {
+    await action(async () => {
+      const noteKey = `k-${id}`;
+      const note = (notes[noteKey] || "").trim();
+      await request(`/knowledge/${kind}/${id}/${verb}`, note ? { note } : {});
+      setNotes((n) => {
+        const next = { ...n };
+        delete next[noteKey];
+        return next;
+      });
+      setMessage(
+        verb === "approve"
+          ? "Knowledge approved. It now appears as trusted for this feature."
+          : "Knowledge rejected. It will not become trusted.",
+      );
+      await refresh();
+    });
+  }
   async function download(id: string, kind: string) {
     await action(async () => {
       const res = await fetch(API + "/artifacts/" + id, {
@@ -332,6 +381,9 @@ export default function Home() {
   const questions =
     state?.clarifications.filter((q) => q.status === "open") || [];
   const pendingProposals = state?.proposals || [];
+  const pendingKnowledgeItems = state?.knowledgeInbox.items || [];
+  const pendingKnowledgeEdges = state?.knowledgeInbox.edges || [];
+  const pendingKnowledgeCount = pendingKnowledgeItems.length + pendingKnowledgeEdges.length;
   return (
     <div className="shell">
       <header className="masthead">
@@ -378,6 +430,13 @@ export default function Home() {
                 <Badge variant="outline">{pendingProposals.length}</Badge>
               )}
             </TabsTrigger>
+            <TabsTrigger value="knowledge">
+              <Lightbulb />
+              Knowledge
+              {pendingKnowledgeCount > 0 && (
+                <Badge variant="outline">{pendingKnowledgeCount}</Badge>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="safety">
               <ShieldCheck />
               Safety & coverage
@@ -404,9 +463,11 @@ export default function Home() {
                         ? "Every run, accounted for"
                         : tab === "proposals"
                           ? "Nothing changes without your say"
-                          : tab === "safety"
-                            ? "Confidence needs evidence"
-                            : "Connect your test environment"}
+                          : tab === "knowledge"
+                            ? "Observed is evidence. Approved is truth."
+                            : tab === "safety"
+                              ? "Confidence needs evidence"
+                              : "Connect your test environment"}
               </h1>
               <p>
                 {tab === "workspace"
@@ -419,9 +480,11 @@ export default function Home() {
                         ? "Results and evidence are retained, including failed and interrupted runs."
                         : tab === "proposals"
                           ? "A candidate change to a locator or test never applies itself. Review the evidence, then approve or reject."
-                          : tab === "safety"
-                            ? "A bounded first version, with clear limits and no silent changes to expected behavior."
-                            : "Start with an isolated test application, then verify your Lawcus staging access."}
+                          : tab === "knowledge"
+                            ? "Every rule below cites its source. Nothing becomes trusted product truth until you approve it."
+                            : tab === "safety"
+                              ? "A bounded first version, with clear limits and no silent changes to expected behavior."
+                              : "Start with an isolated test application, then verify your Lawcus staging access."}
               </p>
             </div>
             <div className="connection">
@@ -975,6 +1038,138 @@ export default function Home() {
                 ))
               )}
             </div>
+          </TabsContent>
+          <TabsContent value="knowledge">
+            <div className="panel question-panel">
+              <span className="section-label">KNOWLEDGE INBOX</span>
+              {!pendingKnowledgeItems.length && !pendingKnowledgeEdges.length ? (
+                <div className="empty-small">
+                  <Lightbulb />
+                  <h2>Nothing waiting for review</h2>
+                  <p>
+                    Extracted rules and impact-graph relationships land
+                    here — never trusted until you approve them.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {Object.entries(
+                    pendingKnowledgeItems.reduce<Record<string, KnowledgeItem[]>>(
+                      (groups, item) => {
+                        (groups[item.feature_name] ||= []).push(item);
+                        return groups;
+                      },
+                      {},
+                    ),
+                  ).map(([featureName, items]) => (
+                    <div key={featureName}>
+                      <h3>{featureName}</h3>
+                      {items.map((k) => (
+                        <div className="question" key={k.id}>
+                          <div className="inline">
+                            <Badge variant="outline">
+                              {k.type.replaceAll("_", " ")}
+                            </Badge>
+                            <Badge variant="outline">{k.provenance}</Badge>
+                          </div>
+                          <p>
+                            <strong>{k.title}</strong>
+                          </p>
+                          <p className="subtle">{k.statement}</p>
+                          {k.does_not_mean && (
+                            <p className="subtle">
+                              Does not mean: {k.does_not_mean}
+                            </p>
+                          )}
+                          <label className="sr-only" htmlFor={"note-k-" + k.id}>
+                            Decision note
+                          </label>
+                          <Textarea
+                            id={"note-k-" + k.id}
+                            value={notes["k-" + k.id] || ""}
+                            onChange={(e) =>
+                              setNotes({ ...notes, ["k-" + k.id]: e.target.value })
+                            }
+                            placeholder="Optional note explaining your decision…"
+                            maxLength={1000}
+                          />
+                          <div className="inline">
+                            <Button
+                              disabled={busy}
+                              onClick={() => decideKnowledge("items", k.id, "approve")}
+                            >
+                              <Check />
+                              Approve
+                            </Button>
+                            <Button
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() => decideKnowledge("items", k.id, "reject")}
+                            >
+                              <X />
+                              Reject
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  {pendingKnowledgeEdges.length > 0 && (
+                    <div>
+                      <h3>
+                        <Network size={16} /> Impact Graph relationships
+                      </h3>
+                      {pendingKnowledgeEdges.map((edge) => (
+                        <div className="question" key={edge.id}>
+                          <p>
+                            <strong>{edge.from_feature}</strong>{" "}
+                            {edge.type.replaceAll("_", " ").toLowerCase()}{" "}
+                            <strong>{edge.to_feature}</strong>
+                          </p>
+                          <p className="subtle">{edge.rationale}</p>
+                          <div className="inline">
+                            <Button
+                              disabled={busy}
+                              onClick={() => decideKnowledge("edges", edge.id, "approve")}
+                            >
+                              <Check />
+                              Approve
+                            </Button>
+                            <Button
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() => decideKnowledge("edges", edge.id, "reject")}
+                            >
+                              <X />
+                              Reject
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            {state?.knowledgeApproved.length ? (
+              <div className="panel question-panel">
+                <span className="section-label">APPROVED KNOWLEDGE</span>
+                {state.knowledgeApproved.map((group) => (
+                  <div key={group.feature}>
+                    <h3>{group.feature}</h3>
+                    {group.items.map((k) => (
+                      <div className="list-row" key={k.id}>
+                        <div>
+                          <h3>{k.title}</h3>
+                          <p className="subtle">{k.statement}</p>
+                        </div>
+                        <Badge variant="outline">v{k.version}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </TabsContent>
           <TabsContent value="safety">
             <div className="safety-grid">

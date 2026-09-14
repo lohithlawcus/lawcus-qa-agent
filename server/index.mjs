@@ -25,6 +25,8 @@ import { openProposals } from "./core/proposals.mjs";
 import { openTestBook } from "./core/testbook.mjs";
 import { buildRunManifest, ManifestError } from "./core/manifest.mjs";
 import { resolveIntent } from "./core/intent.mjs";
+import { openKnowledge } from "./core/knowledge.mjs";
+import { seedLawcusKnowledge } from "./knowledge/lawcus-seed.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -61,6 +63,11 @@ testbook.backfillHistory(
     ]),
   ),
 );
+const knowledge = openKnowledge(db, audit);
+// V5 Step 9 — proposes the real, sourced Contacts/Leads/Contact Custom
+// Fields extraction and the self-verified Authentication items. Every
+// item/edge lands as pending_review; nothing here approves anything.
+seedLawcusKnowledge(knowledge);
 // section 14: only an interactive operator identity may approve or reject —
 // never the runner, AI planner, recorder or network observer. This service
 // is single-operator (one Mac, one local session), so the OS account name
@@ -253,6 +260,11 @@ const server = createServer(
             .all(),
           proposals: proposals.inbox("pending_review"),
           testbook: testbook.tree(),
+          knowledgeInbox: {
+            items: knowledge.inboxItems(),
+            edges: knowledge.inboxEdges(),
+          },
+          knowledgeApproved: knowledge.approvedByFeature(),
           audit: db
             .prepare(
               "SELECT * FROM audit_events ORDER BY sequence DESC LIMIT 30",
@@ -548,6 +560,32 @@ const server = createServer(
           proposals.reject(id, approverIdentity, input.note ?? null);
           json(res, 200, { status: "rejected" });
         }
+        return;
+      }
+      const knowledgeItemDecision = /^\/knowledge\/items\/([a-f0-9-]{36})\/(approve|reject)$/.exec(
+        pathname,
+      );
+      if (req.method === "POST" && knowledgeItemDecision) {
+        const [, id, verb] = knowledgeItemDecision;
+        const input = DecisionRequest.parse(await body(req));
+        const result =
+          verb === "approve"
+            ? knowledge.approveItem(id, approverIdentity, input.note ?? null)
+            : knowledge.rejectItem(id, approverIdentity, input.note ?? null);
+        json(res, 200, { status: result.status });
+        return;
+      }
+      const knowledgeEdgeDecision = /^\/knowledge\/edges\/([a-f0-9-]{36})\/(approve|reject)$/.exec(
+        pathname,
+      );
+      if (req.method === "POST" && knowledgeEdgeDecision) {
+        const [, id, verb] = knowledgeEdgeDecision;
+        const input = DecisionRequest.parse(await body(req));
+        const result =
+          verb === "approve"
+            ? knowledge.approveEdge(id, approverIdentity, input.note ?? null)
+            : knowledge.rejectEdge(id, approverIdentity, input.note ?? null);
+        json(res, 200, { status: result.status });
         return;
       }
       json(res, 404, { error: "This action is not available." });
