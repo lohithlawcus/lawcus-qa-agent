@@ -1,0 +1,35 @@
+version: 1
+id: auth.valid_login
+feature: authentication
+suite: login-essentials
+name: Sign in with the dedicated test account
+layer: ui
+risk: low
+status: approved
+
+steps:
+  - primitive: auth.open_login_page
+    input:
+      page: "${ctx.page}"
+      origin: "${ctx.origin}"
+  - primitive: auth.ensure_login_fields
+    input:
+      page: "${ctx.page}"
+    saveAs: fields
+  - primitive: auth.fill_credentials
+    input:
+      email: "${fields.email}"
+      password: "${fields.password}"
+      credentials:
+        email: "qa@example.test"
+        password: "Fixture-only-123!"
+  - primitive: auth.resolve_submit_control
+    input:
+      page: "${ctx.page}"
+      aliases: "${ctx.aliases}"
+    saveAs: submit
+
+assertions:
+  - primitive: auth.assert_authenticated_workspace
+    input:
+      page: "${ctx.page}"

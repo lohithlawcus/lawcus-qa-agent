@@ -1,0 +1,113 @@
+import { z } from "zod";
+import { parse as parseYaml } from "yaml";
+import { resolvePrimitive } from "./primitives.mjs";
+
+// V5 section 11 — Safe Test DSL. A test case is strictly validated data: a
+// primitive id plus a plain-value input for every step. Nothing here can
+// carry executable code, a shell command, a file path, or an unbounded URL
+// — the DSL cannot do anything beyond what a step's named, already-approved
+// primitive (server/core/primitives.mjs) does. Every primitive reference is
+// resolved through resolvePrimitive(), so an unknown, unapproved, or
+// hash-mismatched primitive id fails the whole test case closed.
+
+export const DSL_VERSION = 1;
+
+export class DslError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+
+const StepInput = z.record(z.string(), z.unknown()).default({});
+
+const Step = z
+  .object({
+    primitive: z.string().min(1),
+    input: StepInput,
+    saveAs: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const TestCaseDefinition = z
+  .object({
+    version: z.literal(DSL_VERSION),
+    id: z.string().min(1),
+    feature: z.string().min(1),
+    suite: z.string().min(1),
+    name: z.string().min(1),
+    layer: z.enum(["ui", "api", "both"]),
+    risk: z.enum(["low", "normal", "high"]),
+    status: z.enum(["approved", "pending_review", "deprecated"]),
+    setup: z.array(Step).default([]),
+    steps: z.array(Step).min(1),
+    assertions: z.array(Step).default([]),
+    cleanup: z.array(Step).default([]),
+  })
+  .strict();
+
+export function parseTestCase(yamlText) {
+  let raw;
+  try {
+    raw = parseYaml(yamlText);
+  } catch (e) {
+    throw new DslError(
+      "invalid_yaml",
+      `Test case is not valid YAML: ${e.message}`,
+    );
+  }
+  const result = TestCaseDefinition.safeParse(raw);
+  if (!result.success)
+    throw new DslError(
+      "invalid_definition",
+      `Test case failed DSL validation: ${result.error.issues
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+        .join("; ")}`,
+    );
+  return result.data;
+}
+
+const REFERENCE = /^\$\{([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)\}$/;
+
+function resolveValue(value, scope) {
+  if (Array.isArray(value)) return value.map((entry) => resolveValue(entry, scope));
+  if (value && typeof value === "object") return resolveInput(value, scope);
+  if (typeof value !== "string") return value;
+  const match = REFERENCE.exec(value);
+  if (!match) return value;
+  const path = match[1].split(".");
+  let current = scope;
+  for (const key of path) {
+    if (current == null || !(key in current))
+      throw new DslError(
+        "unresolved_reference",
+        `DSL reference "${value}" does not resolve against the current run scope.`,
+      );
+    current = current[key];
+  }
+  return current;
+}
+
+function resolveInput(input, scope) {
+  const resolved = {};
+  for (const [key, value] of Object.entries(input))
+    resolved[key] = resolveValue(value, scope);
+  return resolved;
+}
+
+// Runs setup, then steps, then assertions, then cleanup, in that order,
+// sharing one scope so later steps can reference earlier saveAs results.
+// Every primitive call goes through resolvePrimitive() — the same
+// fail-closed gate the runner used directly before this DSL layer existed.
+export async function runTestCase(definition, initialScope) {
+  const scope = { ...initialScope };
+  for (const phase of ["setup", "steps", "assertions", "cleanup"]) {
+    for (const step of definition[phase]) {
+      const primitive = resolvePrimitive(step.primitive);
+      const input = resolveInput(step.input, scope);
+      const result = await primitive.run(input);
+      if (step.saveAs) scope[step.saveAs] = result;
+    }
+  }
+  return scope;
+}

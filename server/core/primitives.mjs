@@ -57,10 +57,13 @@ async function authResolveSubmitControl({ page, aliases }) {
   if (matches.length !== 1)
     throw new Error("The sign-in action could not be identified uniquely.");
   const candidate = matches[0];
-  return {
-    candidate,
-    locator: page.getByRole("button", { name: candidate, exact: true }),
-  };
+  // v2: resolve AND activate the control in one primitive, matching the
+  // original V1 semantics (resolve immediately followed by click, with no
+  // other consumer of the raw locator) instead of returning a bare locator
+  // for a separate click step — see section 12's warning against
+  // click()/type()-sized primitives.
+  await page.getByRole("button", { name: candidate, exact: true }).click();
+  return { candidate };
 }
 
 async function authAssertPasswordMasked({ password }) {
@@ -158,20 +161,19 @@ register({
 });
 register({
   id: "auth.resolve_submit_control",
-  version: 1,
+  version: 2,
   layer: "ui",
   action:
-    "Resolve the sign-in control among known semantic aliases, requiring exactly one unambiguous visible and enabled match.",
+    "Resolve the sign-in control among known semantic aliases, requiring exactly one unambiguous visible and enabled match, then activate it.",
   status: "approved",
   risk: "medium",
   dependencies: [],
-  sideEffects: [],
+  sideEffects: ["form-submission"],
   networkAuthority: [],
   impl: authResolveSubmitControl,
-  approvedHash:
-    "78719943ffdb1b41e9eb3ea5918598e53bd042287e5d0d737661f53d29a3c970",
+  approvedHash: "983f5048505de26febaeb86f607c080ad84cc6e440e8dce18065bc640e6be879",
   approvedBy: "operator:lohithreddysripathi",
-  approvedAt: "2026-09-15T00:00:00.000Z",
+  approvedAt: "2026-09-15T01:00:00.000Z",
 });
 register({
   id: "auth.assert_password_masked",

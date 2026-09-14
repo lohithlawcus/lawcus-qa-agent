@@ -1,7 +1,8 @@
 import { chromium } from "playwright";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, unlinkSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   Plan,
   descriptions,
@@ -9,9 +10,32 @@ import {
   evaluateLocatorCandidate,
 } from "./contracts.mjs";
 import { openProposals } from "./proposals.mjs";
-import { resolvePrimitive } from "./primitives.mjs";
+import { parseTestCase, runTestCase } from "./dsl.mjs";
 import { now } from "./store.mjs";
 const aliases = ["Sign in", "Log in", "Login"];
+
+// V5 Step 4 — each scenario's primitive sequence is now declarative DSL
+// (server/dsl/login/*.yaml, validated by server/core/dsl.mjs) instead of
+// hardcoded control flow here. Loaded and schema-validated once at module
+// load: an invalid or malformed test case definition fails the service
+// startup rather than failing mid-run.
+const dslDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dsl", "login");
+const loadCase = (name) =>
+  parseTestCase(readFileSync(join(dslDir, `${name}.yaml`), "utf8"));
+const testCases = {
+  password_masked: loadCase("password_masked"),
+  empty_fields: loadCase("empty_fields"),
+  valid_login: loadCase("valid_login"),
+  invalid_password: loadCase("invalid_password"),
+  logout: loadCase("logout"),
+};
+// Only these scenarios resolve a candidate submit control worth evaluating
+// for a LOCATOR_REPAIR proposal (password_masked/empty_fields never submit).
+const LOCATOR_EVALUATED_SCENARIOS = new Set([
+  "valid_login",
+  "invalid_password",
+  "logout",
+]);
 export async function executeRun({
   db,
   audit,
@@ -82,63 +106,16 @@ export async function executeRun({
         });
         page = await context.newPage();
         page.on("dialog", (dialog) => void dialog.dismiss());
-        // V5 Step 3 — every browser action/assertion below runs through the
-        // Approved Primitive Registry (server/core/primitives.mjs) instead of
-        // inline Playwright code. resolvePrimitive() fails closed on any
-        // unknown, unapproved or tampered implementation.
-        await resolvePrimitive("auth.open_login_page").run({ page, origin });
-        const { email, password } = await resolvePrimitive(
-          "auth.ensure_login_fields",
-        ).run({ page });
-        if (scenario === "password_masked") {
-          await resolvePrimitive("auth.assert_password_masked").run({
-            password,
-          });
-        } else if (scenario === "empty_fields") {
-          const resolved = await resolvePrimitive(
-            "auth.resolve_submit_control",
-          ).run({ page, aliases });
-          await resolved.locator.click();
-          await resolvePrimitive("auth.assert_empty_fields_blocked").run({
-            page,
-            email,
-            password,
-          });
-        } else {
-          await resolvePrimitive("auth.fill_credentials").run({
-            email,
-            password,
-            credentials: {
-              email: "qa@example.test",
-              password:
-                scenario === "invalid_password"
-                  ? "Incorrect-fixture-value"
-                  : "Fixture-only-123!",
-            },
-          });
-          const resolved = await resolvePrimitive(
-            "auth.resolve_submit_control",
-          ).run({ page, aliases });
-          candidate = resolved.candidate;
-          await resolved.locator.click();
-          if (scenario === "invalid_password") {
-            await resolvePrimitive(
-              "auth.assert_invalid_credentials_rejected",
-            ).run({ page });
-            await resolvePrimitive("auth.assert_protected_route_blocked").run(
-              { page, origin },
-            );
-          } else {
-            await resolvePrimitive("auth.assert_authenticated_workspace").run(
-              { page },
-            );
-            if (scenario === "logout") {
-              await resolvePrimitive("auth.logout").run({ page });
-              await resolvePrimitive(
-                "auth.assert_protected_route_blocked",
-              ).run({ page, origin });
-            }
-          }
+        // V5 Step 4 — run the scenario's declarative DSL definition. Every
+        // primitive it references is resolved through the same fail-closed
+        // gate (server/core/primitives.mjs) the runner used directly before
+        // this layer existed; an unknown/unapproved primitive id in the DSL
+        // fails the run rather than silently skipping.
+        const scope = await runTestCase(testCases[scenario], {
+          ctx: { page, origin, aliases },
+        });
+        if (LOCATOR_EVALUATED_SCENARIOS.has(scenario)) {
+          candidate = scope.submit.candidate;
           // V5 Step 1 — automatic trusted locator repair is removed.
           // A candidate locator now produces a LOCATOR_REPAIR proposal and the
           // trusted path is left exactly as it was. `label` is NOT reassigned.
