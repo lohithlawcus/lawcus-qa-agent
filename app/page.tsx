@@ -11,6 +11,7 @@ import {
   BookOpen,
   LockKeyhole,
   Check,
+  X,
   AlertTriangle,
   LoaderCircle,
   ChevronRight,
@@ -19,6 +20,7 @@ import {
   Terminal,
   Globe,
   RotateCcw,
+  Inbox,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -59,11 +61,29 @@ type Question = {
   status: string;
   answer?: string;
 };
+type Proposal = {
+  id: string;
+  type: string;
+  status: string;
+  summary: string;
+  trigger: string;
+  subject_kind: string;
+  subject_id: string;
+  current_value: string | null;
+  proposed_value: string;
+  confidence: number | null;
+  risk: string;
+  required_approver_role: string;
+  generated_by: string;
+  created_at: string;
+  expires_at: string;
+};
 type State = {
   environments: { id: string; name: string; url: string }[];
   runbooks: Book[];
   runs: Run[];
   clarifications: Question[];
+  proposals: Proposal[];
   audit: { id: string; action: string; created_at: string }[];
   planner: string;
 };
@@ -131,6 +151,7 @@ export default function Home() {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
   const refresh = useCallback(async () => {
     setState(await request<State>("/state"));
   }, []);
@@ -215,6 +236,23 @@ export default function Home() {
       setTab("workspace");
     });
   }
+  async function decide(id: string, verb: "approve" | "reject") {
+    await action(async () => {
+      const note = (notes[id] || "").trim();
+      await request(`/proposals/${id}/${verb}`, note ? { note } : {});
+      setNotes((n) => {
+        const next = { ...n };
+        delete next[id];
+        return next;
+      });
+      setMessage(
+        verb === "approve"
+          ? "Proposal approved. The trusted value has been updated."
+          : "Proposal rejected. The trusted value is unchanged.",
+      );
+      await refresh();
+    });
+  }
   async function download(id: string, kind: string) {
     await action(async () => {
       const res = await fetch(API + "/artifacts/" + id, {
@@ -234,6 +272,7 @@ export default function Home() {
   const passed = state?.runs.filter((r) => r.status === "passed").length || 0;
   const questions =
     state?.clarifications.filter((q) => q.status === "open") || [];
+  const pendingProposals = state?.proposals || [];
   return (
     <div className="shell">
       <header className="masthead">
@@ -269,6 +308,13 @@ export default function Home() {
               <History />
               Run history
             </TabsTrigger>
+            <TabsTrigger value="proposals">
+              <Inbox />
+              Proposals
+              {pendingProposals.length > 0 && (
+                <Badge variant="outline">{pendingProposals.length}</Badge>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="safety">
               <ShieldCheck />
               Safety & coverage
@@ -291,9 +337,11 @@ export default function Home() {
                     ? "Your reusable tests"
                     : tab === "history"
                       ? "Every run, accounted for"
-                      : tab === "safety"
-                        ? "Confidence needs evidence"
-                        : "Connect your test environment"}
+                      : tab === "proposals"
+                        ? "Nothing changes without your say"
+                        : tab === "safety"
+                          ? "Confidence needs evidence"
+                          : "Connect your test environment"}
               </h1>
               <p>
                 {tab === "workspace"
@@ -302,9 +350,11 @@ export default function Home() {
                     ? "Saved logical tests stay separate from their browser execution paths."
                     : tab === "history"
                       ? "Results and evidence are retained, including failed and interrupted runs."
-                      : tab === "safety"
-                        ? "A bounded first version, with clear limits and no silent changes to expected behavior."
-                        : "Start with an isolated test application, then verify your Lawcus staging access."}
+                      : tab === "proposals"
+                        ? "A candidate change to a locator or test never applies itself. Review the evidence, then approve or reject."
+                        : tab === "safety"
+                          ? "A bounded first version, with clear limits and no silent changes to expected behavior."
+                          : "Start with an isolated test application, then verify your Lawcus staging access."}
               </p>
             </div>
             <div className="connection">
@@ -597,6 +647,10 @@ export default function Home() {
                     <span>Questions to review</span>
                     <strong>{questions.length}</strong>
                   </div>
+                  <div className="metric">
+                    <span>Proposals to review</span>
+                    <strong>{pendingProposals.length}</strong>
+                  </div>
                   <div className="small-note">
                     Review each run’s environment and evidence. Login checks do not cover every feature.
                   </div>
@@ -687,6 +741,77 @@ export default function Home() {
                       <ChevronRight size={17} />
                     </div>
                   </button>
+                ))
+              )}
+            </div>
+          </TabsContent>
+          <TabsContent value="proposals">
+            <div className="panel question-panel">
+              <span className="section-label">PROPOSAL INBOX</span>
+              {!pendingProposals.length ? (
+                <div className="empty-small">
+                  <Inbox />
+                  <h2>No proposals waiting</h2>
+                  <p>
+                    When a run finds a candidate locator or another
+                    change worth considering, it will appear here for
+                    approval — never applied automatically.
+                  </p>
+                </div>
+              ) : (
+                pendingProposals.map((p) => (
+                  <div className="question" key={p.id}>
+                    <div className="inline">
+                      <Badge variant="outline">
+                        {p.type.replaceAll("_", " ")}
+                      </Badge>
+                      <Badge variant="outline">{p.risk} risk</Badge>
+                      {p.confidence != null && (
+                        <span className="subtle">
+                          {Math.round(p.confidence * 100)}% confidence
+                        </span>
+                      )}
+                    </div>
+                    <p>{p.summary}</p>
+                    <p className="subtle">{p.trigger}</p>
+                    <p className="subtle">
+                      {p.subject_kind} · {p.subject_id} ·{" "}
+                      {p.current_value
+                        ? `currently “${p.current_value}”`
+                        : "no trusted value yet"}{" "}
+                      → proposed “{p.proposed_value}”
+                    </p>
+                    <label className="sr-only" htmlFor={"note-" + p.id}>
+                      Decision note
+                    </label>
+                    <Textarea
+                      id={"note-" + p.id}
+                      value={notes[p.id] || ""}
+                      onChange={(e) =>
+                        setNotes({ ...notes, [p.id]: e.target.value })
+                      }
+                      placeholder="Optional note explaining your decision…"
+                      maxLength={1000}
+                    />
+                    <div className="inline">
+                      <Button disabled={busy} onClick={() => decide(p.id, "approve")}>
+                        <Check />
+                        Approve
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => decide(p.id, "reject")}
+                      >
+                        <X />
+                        Reject
+                      </Button>
+                    </div>
+                    <p className="small-note">
+                      Requires {p.required_approver_role} approval · raised by{" "}
+                      {p.generated_by} · expires {date(p.expires_at)}
+                    </p>
+                  </div>
                 ))
               )}
             </div>

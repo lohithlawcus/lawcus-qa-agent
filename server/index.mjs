@@ -7,23 +7,32 @@ import {CredentialSetup,setupStatus,saveCredentials} from './core/setup.mjs';
 import { createServer } from "node:http";
 import { createReadStream, mkdirSync } from "node:fs";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { userInfo } from "node:os";
 import { resolve, join } from "node:path";
 import { openStore, now } from "./core/store.mjs";
 import {
   PlanRequest,
   RunRequest,
   AnswerRequest,
+  DecisionRequest,
   createPlan,
   validateExecution,
   descriptions,
 } from "./core/contracts.mjs";
 import { executeRun } from "./core/runner.mjs";
+import { openProposals } from "./core/proposals.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
 // Bind the fixture first so a duplicate service cannot mark active jobs interrupted.
 const fixture = await startFixture();
 const { db, audit } = openStore(directory);
+const proposals = openProposals(db, audit);
+// section 14: only an interactive operator identity may approve or reject —
+// never the runner, AI planner, recorder or network observer. This service
+// is single-operator (one Mac, one local session), so the OS account name
+// is a stable, non-spoofable identity for every decision made here.
+const approverIdentity = `operator:${userInfo().username}`;
 const artifactDirectory = join(directory, "artifacts");
 const sessions = new Map();
 const allowedOrigins = new Set(["http://127.0.0.1:5173"]);
@@ -195,6 +204,7 @@ const server = createServer(
               "SELECT * FROM clarifications ORDER BY created_at DESC LIMIT 100",
             )
             .all(),
+          proposals: proposals.inbox("pending_review"),
           audit: db
             .prepare(
               "SELECT * FROM audit_events ORDER BY sequence DESC LIMIT 30",
@@ -376,6 +386,21 @@ const server = createServer(
           message:
             "Your answer was recorded. Expected behavior has not been changed. Applying confirmed rule changes is planned for a later version.",
         });
+        return;
+      }
+      const decision = /^\/proposals\/([a-f0-9-]{36})\/(approve|reject)$/.exec(
+        pathname,
+      );
+      if (req.method === "POST" && decision) {
+        const [, id, verb] = decision;
+        const input = DecisionRequest.parse(await body(req));
+        if (verb === "approve") {
+          const result = proposals.approve(id, approverIdentity, input.note ?? null);
+          json(res, 200, { status: "approved", ...result });
+        } else {
+          proposals.reject(id, approverIdentity, input.note ?? null);
+          json(res, 200, { status: "rejected" });
+        }
         return;
       }
       json(res, 404, { error: "This action is not available." });
