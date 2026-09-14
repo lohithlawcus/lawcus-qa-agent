@@ -1,0 +1,11 @@
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+CREATE TABLE environments (id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('fixture','unverified')), execution_enabled INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE runbooks (id TEXT PRIMARY KEY, version INTEGER NOT NULL, environment_id TEXT NOT NULL REFERENCES environments(id), title TEXT NOT NULL, intent TEXT NOT NULL, source TEXT NOT NULL, definition TEXT NOT NULL CHECK(json_valid(definition)), created_at TEXT NOT NULL);
+CREATE TABLE execution_paths (id TEXT PRIMARY KEY, runbook_id TEXT NOT NULL REFERENCES runbooks(id), version INTEGER NOT NULL, fingerprint TEXT NOT NULL CHECK(json_valid(fingerprint)), created_at TEXT NOT NULL, UNIQUE(runbook_id, version));
+CREATE TABLE runs (id TEXT PRIMARY KEY, runbook_id TEXT NOT NULL REFERENCES runbooks(id), status TEXT NOT NULL CHECK(status IN ('running','passed','failed','interrupted')), replay INTEGER NOT NULL, path_id TEXT REFERENCES execution_paths(id), model_calls INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL, finished_at TEXT, summary TEXT);
+CREATE UNIQUE INDEX one_active_run ON runs(status) WHERE status = 'running';
+CREATE TABLE scenario_results (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), scenario TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, expected TEXT NOT NULL, actual TEXT NOT NULL, duration_ms INTEGER NOT NULL, healed INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE artifacts (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), scenario_result_id TEXT REFERENCES scenario_results(id), kind TEXT NOT NULL CHECK(kind IN ('screenshot','trace')), filename TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE clarifications (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), question TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', answer TEXT, created_at TEXT NOT NULL, answered_at TEXT);
+CREATE TABLE audit_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, entity_id TEXT NOT NULL, details TEXT NOT NULL CHECK(json_valid(details)), created_at TEXT NOT NULL);
