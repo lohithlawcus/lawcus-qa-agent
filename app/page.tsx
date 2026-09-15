@@ -1342,7 +1342,7 @@ export default function Home() {
               <span className="section-label">KILL SWITCH</span>
               <div className="list-row">
                 <div>
-                  <h3>AI Enabled</h3>
+                  <h3>{state?.aiUsage.aiEnabled ? "AI Enabled" : "AI Disabled"}</h3>
                   <p className="subtle">
                     {state?.aiUsage.aiEnabled
                       ? "AI may be used only for genuinely novel prompts the local router can't resolve. Known regression never reaches it."
