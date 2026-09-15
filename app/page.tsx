@@ -28,6 +28,8 @@ import {
   Users,
   Video,
   GitBranch,
+  Cpu,
+  Power,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -203,6 +205,29 @@ type State = {
   authoringSessions: AuthoringSession[];
   audit: { id: string; action: string; created_at: string }[];
   planner: string;
+  aiUsage: AiUsageSummary;
+};
+type AiUsageSummary = {
+  since: string;
+  aiEnabled: boolean;
+  totalRequests: number;
+  allowedRequests: number;
+  blockedRequests: number;
+  byTask: Record<string, number>;
+  inputTokens: number;
+  outputTokens: number;
+  totalRuns: number;
+  runsUsingAi: number;
+  recent: {
+    id: string;
+    task: string;
+    category: string;
+    allowed: number;
+    reason: string;
+    requester: string;
+    error_code: string | null;
+    created_at: string;
+  }[];
 };
 type Manifest = {
   version: number;
@@ -452,6 +477,12 @@ export default function Home() {
       await refresh();
     });
   }
+  async function toggleAiGate(enabled: boolean) {
+    await action(async () => {
+      await request("/ai-gate/toggle", { enabled });
+      await refresh();
+    });
+  }
   async function openRun(id: string) {
     await action(async () => {
       setDetail(await request<Detail>("/runs/" + id));
@@ -696,6 +727,10 @@ export default function Home() {
               <GitBranch />
               Impacted Testing
             </TabsTrigger>
+            <TabsTrigger value="ai-usage">
+              <Cpu />
+              AI Usage
+            </TabsTrigger>
             <TabsTrigger value="history">
               <History />
               Run history
@@ -749,7 +784,9 @@ export default function Home() {
                     ? "The record of what's actually proven"
                     : tab === "impacted"
                       ? "Ask in plain English. See what's already proven, and what isn't."
-                      : tab === "history"
+                      : tab === "ai-usage"
+                        ? "Known work costs zero model calls"
+                        : tab === "history"
                         ? "Every run, accounted for"
                         : tab === "proposals"
                           ? "Nothing changes without your say"
@@ -772,7 +809,9 @@ export default function Home() {
                     ? "Feature → suite → test case, each on a versioned definition, with its real execution history."
                     : tab === "impacted"
                       ? "Local intent → Impact Graph → approved Knowledge → TestBook coverage → gap detection. No AI call unless a gap needs one proposed."
-                      : tab === "history"
+                      : tab === "ai-usage"
+                        ? "Every model call is logged, permitted only by policy, and never the normal way this system runs."
+                        : tab === "history"
                         ? "Results and evidence are retained, including failed and interrupted runs."
                         : tab === "proposals"
                           ? "A candidate change to a locator or test never applies itself. Review the evidence, then approve or reject."
@@ -1295,6 +1334,71 @@ export default function Home() {
                     </p>
                   )}
                 </>
+              )}
+            </div>
+          </TabsContent>
+          <TabsContent value="ai-usage">
+            <div className="panel">
+              <span className="section-label">KILL SWITCH</span>
+              <div className="list-row">
+                <div>
+                  <h3>AI Enabled</h3>
+                  <p className="subtle">
+                    {state?.aiUsage.aiEnabled
+                      ? "AI may be used only for genuinely novel prompts the local router can't resolve. Known regression never reaches it."
+                      : "AI is fully disabled. An unrecognized prompt returns an error instead of calling a model."}
+                  </p>
+                </div>
+                <Button
+                  variant={state?.aiUsage.aiEnabled ? "outline" : undefined}
+                  disabled={busy}
+                  onClick={() => toggleAiGate(!state?.aiUsage.aiEnabled)}
+                >
+                  <Power />
+                  {state?.aiUsage.aiEnabled ? "Disable AI" : "Enable AI"}
+                </Button>
+              </div>
+            </div>
+            <div className="panel">
+              <span className="section-label">LAST 24 HOURS</span>
+              <div className="inline">
+                <Badge variant="outline">{state?.aiUsage.totalRuns ?? 0} runs total</Badge>
+                <Badge variant="outline">{state?.aiUsage.runsUsingAi ?? 0} used AI</Badge>
+                <Badge variant="outline">{state?.aiUsage.allowedRequests ?? 0} AI calls allowed</Badge>
+                <Badge variant="outline">{state?.aiUsage.blockedRequests ?? 0} refused</Badge>
+                <Badge variant="outline">
+                  {(state?.aiUsage.inputTokens ?? 0) + (state?.aiUsage.outputTokens ?? 0)} tokens
+                </Badge>
+              </div>
+            </div>
+            <div className="panel">
+              <span className="section-label">RECENT REQUESTS</span>
+              {!state?.aiUsage.recent.length ? (
+                <div className="empty-small">
+                  <Cpu />
+                  <h2>No AI requests in this window</h2>
+                  <p>Known prompts and known regression never reach this layer.</p>
+                </div>
+              ) : (
+                state.aiUsage.recent.map((r) => (
+                  <div className="list-row" key={r.id}>
+                    <div>
+                      <h3>
+                        {r.task} · {r.category.replaceAll("_", " ")}
+                      </h3>
+                      <p className="subtle">{r.reason}</p>
+                      <span className="subtle">
+                        {r.requester} · {date(r.created_at)}
+                      </span>
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className={"status " + (r.allowed ? "passed" : "failed")}
+                    >
+                      {r.allowed ? "allowed" : r.error_code ?? "refused"}
+                    </Badge>
+                  </div>
+                ))
               )}
             </div>
           </TabsContent>

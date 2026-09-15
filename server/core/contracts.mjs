@@ -38,6 +38,7 @@ export const DecisionRequest = z
 export const ImpactedTestRequest = z
   .object({ intent: z.string().trim().min(3).max(1000) })
   .strict();
+export const AiGateToggleRequest = z.object({ enabled: z.boolean() }).strict();
 export const descriptions = {
   valid_login: {
     title: "Sign in with the dedicated test account",

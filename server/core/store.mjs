@@ -201,6 +201,18 @@ export function openStore(directory) {
     if (inconsistentProposals17.length)
       throw new Error(`Migration 17 left inconsistent foreign keys: ${JSON.stringify(inconsistentProposals17)}`);
   }
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=18").get()) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(readFileSync(new URL("../migrations/018_ai_gate.sql", import.meta.url), "utf8"));
+      db.prepare("INSERT INTO schema_migrations VALUES(18,?)").run(now());
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+  }
+  // AI is enabled by default — the Gate's whole job is auditing/permitting
+  // real usage, not silently turning it off. INSERT OR IGNORE means this
+  // never overwrites an operator's own choice on a later startup.
+  db.prepare("INSERT OR IGNORE INTO ai_gate_settings(id,ai_enabled,updated_at) VALUES(1,1,?)").run(now());
   const stale = db.prepare("SELECT id FROM runs WHERE status='running'").all();
   db.prepare(
     "UPDATE runs SET status='interrupted',finished_at=?,summary='The runner stopped before this run completed. Review the partial results before running again.' WHERE status='running'",

@@ -7,6 +7,7 @@ import { normalizeCandidateActions, matchActionsToPrimitives, buildProposalSpecs
 import { listPrimitives } from './core/primitives.mjs';
 import { summarizeBody } from './core/sanitize.mjs';
 import { createModelRouter, recordModelUsage } from './ai/router.mjs';
+import { openAiGate } from './ai/gate.mjs';
 import { createOpenAIProvider } from './ai/providers/openai.mjs';
 import {keychain, readSecret} from './core/secrets.mjs';
 import {openEvidence} from './core/setup.mjs';
@@ -24,6 +25,7 @@ import {
   AnswerRequest,
   DecisionRequest,
   ImpactedTestRequest,
+  AiGateToggleRequest,
   createPlan,
   validateExecution,
   descriptions,
@@ -60,6 +62,11 @@ const testbook = openTestBook(db, audit);
 const modelRouter = createModelRouter({
   providers: { openai: createOpenAIProvider() },
 });
+// V5 Upgrade Phase U1 — the AI Gate wraps modelRouter; no other module
+// may import router.mjs's run() directly from here on. See
+// server/ai/gate.mjs for why this exists alongside, not instead of, the
+// Step 8 router.
+const aiGate = openAiGate(db, audit, { modelRouter });
 // V5 Step 5 — make sure the Authentication / login-essentials cases exist
 // (and are on their current version) before the first request, not only
 // after the first run; then link any pre-TestBook history by scenario name.
@@ -526,6 +533,7 @@ const server = createServer(
             .all(),
           planner: "openai-for-staging",
           browser:browserStatus,
+          aiUsage: aiGate.usageSummary(),
         });
         return;
       }
@@ -556,7 +564,7 @@ const server = createServer(
               ? {plan:{title:'Login essentials',scenarios:['password_masked','empty_fields','valid_login','logout']},source:'standard',modelCalls:0}
               : routed?.matched
                 ? {plan:{title:'Login essentials',scenarios:routed.scenarios},source:'intent-router',modelCalls:0}
-                : await modelRouter.run('planLogin', { intent: input.intent, negativeAllowed: false })
+                : await aiGate.run('planLogin', { intent: input.intent, negativeAllowed: false }, { requester: approverIdentity, reason: 'Local intent router could not resolve this prompt to a known suite.' })
             : await createPlan(input.intent);
         } finally {planning=false;}
         db.prepare("INSERT INTO runbooks VALUES(?,?,?,?,?,?,?,?)").run(
@@ -569,7 +577,8 @@ const server = createServer(
           JSON.stringify(result.plan),
           now(),
         );
-        recordModelUsage(db, { result, runbookId: id });
+        const modelUsageId = recordModelUsage(db, { result, runbookId: id });
+        if (result.aiGateRequestId) aiGate.finalizeRequest(result.aiGateRequestId, { runbookId: id, modelUsageId });
         if (routed)
           db.prepare(
             `INSERT INTO intent_resolutions(
@@ -909,6 +918,16 @@ const server = createServer(
         }
         audit("impacted_test.completed", runId, { results: results.length, filedProposals: filedProposals.length });
         json(res, 200, { runId, plan, results, filedProposals });
+        return;
+      }
+      // V5 Upgrade Phase U1 — the AI Gate's own kill switch. Human-only
+      // (aiGate.setEnabled refuses a non-human approverIdentity the same
+      // way every other decision route does), and every toggle is
+      // audited.
+      if (req.method === "POST" && pathname === "/ai-gate/toggle") {
+        const input = AiGateToggleRequest.parse(await body(req));
+        const result = aiGate.setEnabled(input.enabled, approverIdentity);
+        json(res, 200, result);
         return;
       }
       const apiContractDecision = /^\/api-contracts\/([a-f0-9-]{36})\/(approve|reject)$/.exec(

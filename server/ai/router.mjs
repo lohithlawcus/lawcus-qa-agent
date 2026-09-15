@@ -74,12 +74,13 @@ export function createModelRouter({ providers, policy = TASK_POLICY }) {
 // with no `usage` (the standard/intent-router/fixture paths never call a
 // model at all, and a rejected call reports no usage today either).
 export function recordModelUsage(db, { result, runbookId }) {
-  if (!result?.usage) return;
+  if (!result?.usage) return null;
+  const id = randomUUID();
   db.prepare(
     `INSERT INTO model_usage(id,provider,model,purpose,input_tokens,output_tokens,runbook_id,created_at)
      VALUES(?,?,?,?,?,?,?,?)`,
   ).run(
-    randomUUID(),
+    id,
     result.provider,
     result.usage.model,
     result.task,
@@ -88,4 +89,5 @@ export function recordModelUsage(db, { result, runbookId }) {
     runbookId,
     now(),
   );
+  return id;
 }
