@@ -1,0 +1,92 @@
+name: CI
+
+# V5 Step 19 / master spec section 56 — controlled CI, scoped exactly to
+# what the spec asks for and no further.
+#
+# "CI should invoke already approved suites/cases/impacted sets through
+# Lawcus QA Core API/CLI" — `npm test` and `npm run test:browser` ARE that
+# invocation: they run this project's own already-reviewed Core modules
+# and the Authentication/login-essentials TestBook suite against the
+# local, synthetic fixture (server/fixture.mjs), not a hand-rolled
+# duplicate test harness.
+#
+# "CI must not: run AI healer, modify trusted tests, then report green."
+# Nothing in this workflow can do that — there is no AI call anywhere
+# here, no step ever writes to a trusted definition, and the job's result
+# is a plain, unmassaged pass/fail from real test execution.
+#
+# Deliberately does NOT touch real Lawcus staging: no staging credentials
+# exist in CI secrets, and none should — this project's whole credential
+# model is macOS Keychain-only, local-machine-only, exactly so a shared CI
+# runner can never hold them. The fixture environment is what CI verifies;
+# real-staging verification stays a deliberate, local, human-gated
+# capability (matching this step's own "only later add cloud
+# workers/devices if justified" — that "later" hasn't been justified yet).
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm run install:ci
+
+      - name: Install Chromium (for the fixture-based browser suite)
+        run: npx playwright install --with-deps chromium
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit / security / policy tests
+        run: npm test
+
+      - name: Real-Chromium fixture tests
+        run: npm run test:browser
+
+      - name: Build
+        run: npm run build
+
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
+      # Section 56: "Persist release/build metadata." CI runners are
+      # ephemeral — this is what actually persists past the run, as a
+      # durable, downloadable artifact tied to the exact commit tested.
+      - name: Write build metadata
+        if: always()
+        run: |
+          mkdir -p ci-metadata
+          cat > ci-metadata/build.json <<JSON
+          {
+            "commit": "${{ github.sha }}",
+            "ref": "${{ github.ref }}",
+            "runId": "${{ github.run_id }}",
+            "runNumber": "${{ github.run_number }}",
+            "actor": "${{ github.actor }}",
+            "event": "${{ github.event_name }}",
+            "result": "${{ job.status }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          JSON
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-metadata-${{ github.run_number }}
+          path: ci-metadata/build.json
+          retention-days: 90
