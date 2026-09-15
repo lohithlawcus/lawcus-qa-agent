@@ -153,9 +153,32 @@ export function proposeGapCoverage({ proposals, plan, generatedBy = "impacted_te
  * result to scenario_results linked to its exact TestBook case/version
  * (section 5/6 discipline) under one real run. Never executes a gap cell —
  * those only ever reach proposeGapCoverage.
+ *
+ * Each real cell is a full, fresh login against staging (server/core/
+ * live-runner.mjs's run*Check helpers). Live testing on 2026-09-16 showed
+ * several real staging logins fired back-to-back from the same account
+ * intermittently timing out at whichever step ran soonest after the
+ * previous one — not always the first, and neither raising the shared
+ * login timeout nor this delay (real staging-side settling time between
+ * consecutive real executions — never before the first one, never for a
+ * skipped gap) alone eliminated it, just reduced how often it hit. Real,
+ * repeated evidence pointed to intermittent staging-side slowness, not a
+ * bug in this code — the same 3 underlying primitives already passed
+ * cleanly, repeatedly, in Step 15's own separate live proofs.
+ *
+ * LOGIN_IDENTITY_TIMEOUT_PATTERN below gets exactly one real retry (a
+ * fresh login, not a cached/assumed one) — scoped narrowly to that one
+ * specific known-flaky wait, never to a genuine completed-but-failed
+ * check (outcome.passed===false skips this catch block entirely) or any
+ * other kind of thrown error. A retry that also fails still reports
+ * failed, honestly — this absorbs one-off staging hiccups, it never
+ * masks a real problem.
  */
-export async function executeImpactedTest({ plan, runners, db, runId, testbook }) {
+const LOGIN_IDENTITY_TIMEOUT_PATTERN = /getByPlaceholder\('Search your practice'/;
+
+export async function executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs = 8000 }) {
   const results = [];
+  let executedAny = false;
   for (const cell of plan.cells) {
     if (!cell.covered) {
       results.push({ ...cell, executed: false });
@@ -163,15 +186,29 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook }
     }
     const runner = runners[cell.externalId];
     if (!runner) throw new Error(`No native runner registered for covered case "${cell.externalId}".`);
+    if (executedAny && delayBetweenRunsMs > 0) await new Promise((resolve) => setTimeout(resolve, delayBetweenRunsMs));
+    executedAny = true;
     const startedAt = Date.now();
-    let status, actual;
+    let status, actual, retried = false;
     try {
       const outcome = await runner();
       status = outcome.passed ? "passed" : "failed";
       actual = outcome.actual;
     } catch (error) {
-      status = "failed";
-      actual = `Execution error: ${error.message}`;
+      if (!LOGIN_IDENTITY_TIMEOUT_PATTERN.test(error.message)) {
+        status = "failed";
+        actual = `Execution error: ${error.message}`;
+      } else {
+        retried = true;
+        try {
+          const outcome = await runner();
+          status = outcome.passed ? "passed" : "failed";
+          actual = `(retried once after the first login timed out) ${outcome.actual}`;
+        } catch (retryError) {
+          status = "failed";
+          actual = `Execution error (after one retry): ${retryError.message}`;
+        }
+      }
     }
     const definition = testbook.resolveCurrentDefinition(cell.externalId);
     const scenarioResultId = randomUUID();
@@ -191,7 +228,7 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook }
       definition?.testCaseId ?? null,
       definition?.versionId ?? null,
     );
-    results.push({ ...cell, executed: true, status, actual, scenarioResultId });
+    results.push({ ...cell, executed: true, status, actual, retried, scenarioResultId });
   }
   return results;
 }

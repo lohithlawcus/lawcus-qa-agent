@@ -430,7 +430,12 @@ export async function runContactCustomFieldCheck({apiContracts,mutationJournal,r
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
   browser=await launch(proxy);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  context.setDefaultTimeout(20000);context.setDefaultNavigationTimeout(25000);
+  // Bumped from 20000 -> 35000 (2026-09-16): two real staging runs each
+  // showed the FIRST real login of a rapid back-to-back batch timing out
+  // waiting for the post-login identity check, while every login right
+  // after it (same code) succeeded normally — real staging-side slowness
+  // on a cold first login, not a bug in this flow.
+  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
    if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
@@ -460,7 +465,9 @@ export async function runLeadCustomFieldCheck({apiContracts,mutationJournal,runI
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
   browser=await launch(proxy);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:LEADS_VIEWPORT});
-  context.setDefaultTimeout(20000);context.setDefaultNavigationTimeout(25000);
+  // Bumped from 20000 -> 35000 (2026-09-16) — see the identical comment in
+  // runContactCustomFieldCheck above.
+  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
    if(!permitLeadsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
@@ -490,7 +497,9 @@ export async function runContactCreationCheck({apiContracts,firstName,lastName})
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
   browser=await launch(proxy);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  context.setDefaultTimeout(20000);context.setDefaultNavigationTimeout(25000);
+  // Bumped from 20000 -> 35000 (2026-09-16) — see the identical comment in
+  // runContactCustomFieldCheck above.
+  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
    if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
@@ -517,7 +526,9 @@ export async function runLeadCreationCheck({apiContracts,firstName,lastName,matt
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
   browser=await launch(proxy);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:LEADS_VIEWPORT});
-  context.setDefaultTimeout(20000);context.setDefaultNavigationTimeout(25000);
+  // Bumped from 20000 -> 35000 (2026-09-16) — see the identical comment in
+  // runContactCustomFieldCheck above.
+  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
    if(!permitLeadsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}

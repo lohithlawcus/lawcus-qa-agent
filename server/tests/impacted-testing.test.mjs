@@ -172,7 +172,7 @@ test("executeImpactedTest runs only covered cells for real, records scenario_res
       "leads.custom_field_update_existing": async () => { calls++; throw new Error("boom"); },
       "leads.create_new_verifies_custom_fields": async () => { calls++; return { passed: true, actual: "ok" }; },
     };
-    return executeImpactedTest({ plan, runners, db, runId, testbook }).then((results) => {
+    return executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs: 0 }).then((results) => {
       assert.equal(calls, 4);
       const byId = Object.fromEntries(results.map((r) => [r.externalId, r]));
       assert.equal(byId["contacts.custom_field_update_existing"].status, "passed");
@@ -193,10 +193,111 @@ test("executeImpactedTest skips gap cells entirely (never runs unapproved covera
     seedGraph(knowledge);
     const plan = planImpactedTest({ intent: FLAGSHIP_INTENT, knowledge, testbook }); // zero coverage
     const runId = seedRun(db);
-    return executeImpactedTest({ plan, runners: {}, db, runId, testbook }).then((results) => {
+    return executeImpactedTest({ plan, runners: {}, db, runId, testbook, delayBetweenRunsMs: 0 }).then((results) => {
       assert.ok(results.every((r) => r.executed === false));
       const rows = db.prepare("SELECT count(*) n FROM scenario_results WHERE run_id=?").get(runId);
       assert.equal(rows.n, 0);
+    });
+  });
+});
+
+test("executeImpactedTest waits delayBetweenRunsMs between consecutive real executions, but never before the first one", () => {
+  return withApp(({ knowledge, testbook, db }) => {
+    seedGraph(knowledge);
+    seedFullCoverage(testbook);
+    const plan = planImpactedTest({ intent: FLAGSHIP_INTENT, knowledge, testbook }); // 4 covered cells
+    const runId = seedRun(db);
+    const runners = Object.fromEntries(
+      plan.cells.map((c) => [c.externalId, async () => ({ passed: true, actual: "ok" })]),
+    );
+    const startedAt = Date.now();
+    return executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs: 50 }).then(() => {
+      // 4 executions -> 3 gaps between them -> at least 150ms of real delay,
+      // comfortably below what 4 waits (200ms) or zero delay (~0ms) would take.
+      assert.ok(Date.now() - startedAt >= 150, "expected at least 3 real 50ms delays between 4 executions");
+    });
+  });
+});
+
+const LOGIN_TIMEOUT_ERROR = "locator.waitFor: Timeout 35000ms exceeded.\nCall log:\n  - waiting for getByPlaceholder('Search your practice', { exact: true }) to be visible";
+
+test("executeImpactedTest retries exactly once on the specific known-flaky login-identity timeout, and reports success transparently when the retry works", () => {
+  return withApp(({ knowledge, testbook, db }) => {
+    seedGraph(knowledge);
+    seedFullCoverage(testbook);
+    const plan = planImpactedTest({ intent: FLAGSHIP_INTENT, knowledge, testbook });
+    const runId = seedRun(db);
+    let calls = 0;
+    const runners = {
+      "contacts.custom_field_update_existing": async () => {
+        calls++;
+        if (calls === 1) throw new Error(LOGIN_TIMEOUT_ERROR);
+        return { passed: true, actual: "ok" };
+      },
+    };
+    return executeImpactedTest({
+      plan: { ...plan, cells: plan.cells.filter((c) => c.externalId === "contacts.custom_field_update_existing") },
+      runners, db, runId, testbook, delayBetweenRunsMs: 0,
+    }).then((results) => {
+      assert.equal(calls, 2, "expected exactly one retry (two total calls)");
+      assert.equal(results[0].status, "passed");
+      assert.equal(results[0].retried, true);
+      assert.match(results[0].actual, /retried once/);
+    });
+  });
+});
+
+test("executeImpactedTest reports failed, honestly, when the login-identity timeout recurs even after the one retry — never a false pass", () => {
+  return withApp(({ knowledge, testbook, db }) => {
+    seedGraph(knowledge);
+    seedFullCoverage(testbook);
+    const plan = planImpactedTest({ intent: FLAGSHIP_INTENT, knowledge, testbook });
+    const runId = seedRun(db);
+    let calls = 0;
+    const runners = {
+      "contacts.custom_field_update_existing": async () => {
+        calls++;
+        throw new Error(LOGIN_TIMEOUT_ERROR);
+      },
+    };
+    return executeImpactedTest({
+      plan: { ...plan, cells: plan.cells.filter((c) => c.externalId === "contacts.custom_field_update_existing") },
+      runners, db, runId, testbook, delayBetweenRunsMs: 0,
+    }).then((results) => {
+      assert.equal(calls, 2, "expected exactly one retry attempt, not an unbounded loop");
+      assert.equal(results[0].status, "failed");
+      assert.equal(results[0].retried, true);
+      assert.match(results[0].actual, /after one retry/);
+    });
+  });
+});
+
+test("executeImpactedTest never retries a different kind of thrown error, and never retries a completed-but-failed check", () => {
+  return withApp(({ knowledge, testbook, db }) => {
+    seedGraph(knowledge);
+    seedFullCoverage(testbook);
+    const plan = planImpactedTest({ intent: FLAGSHIP_INTENT, knowledge, testbook });
+    const runId = seedRun(db);
+    let unrelatedErrorCalls = 0;
+    let completedFailureCalls = 0;
+    const runners = {
+      "contacts.custom_field_update_existing": async () => {
+        unrelatedErrorCalls++;
+        throw new Error("Could not determine the created contact's uuid from the post-save URL: https://lohith.fiveriverz.com/contacts");
+      },
+      "contacts.create_new_verifies_custom_fields": async () => {
+        completedFailureCalls++;
+        return { passed: false, actual: "the check genuinely ran and genuinely failed" };
+      },
+    };
+    return executeImpactedTest({
+      plan: { ...plan, cells: plan.cells.filter((c) => ["contacts.custom_field_update_existing", "contacts.create_new_verifies_custom_fields"].includes(c.externalId)) },
+      runners, db, runId, testbook, delayBetweenRunsMs: 0,
+    }).then((results) => {
+      assert.equal(unrelatedErrorCalls, 1, "an unrelated error must not be retried");
+      assert.equal(completedFailureCalls, 1, "a genuinely completed failure must not be retried");
+      assert.ok(results.every((r) => r.retried === false));
+      assert.ok(results.every((r) => r.status === "failed"));
     });
   });
 });

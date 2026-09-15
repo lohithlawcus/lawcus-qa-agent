@@ -288,6 +288,7 @@ type ImpactedCell = {
   executed?: boolean;
   status?: string;
   actual?: string;
+  retried?: boolean;
 };
 type ImpactedPlan = {
   normalizedIntent: string;
