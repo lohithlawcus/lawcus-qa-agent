@@ -49,6 +49,53 @@ async function ensureFieldOnForm(page, fieldName) {
   await page.waitForTimeout(500);
 }
 
+/**
+ * Creates a brand-new standalone Person contact through the real "New
+ * Contact" UI (not nested inside a Lead) and returns its real uuid,
+ * correlating the resulting network traffic against the approved
+ * lawcus.contacts.create contract. Only sets First/Last Name — every
+ * default custom field is left at its default (empty) value, matching
+ * what the form itself submits unedited.
+ */
+export async function createContactViaBrowser({ context, apiContracts, firstName, lastName }) {
+  const observer = attachNetworkObserver(context);
+  const page = await context.newPage();
+  try {
+    await page.goto(STAGING + "/dashboard", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    await page.locator("text=Contacts").first().click();
+    await page.waitForTimeout(1500);
+    await page.getByText("New Contact", { exact: false }).first().click().catch(async () => {
+      await page.getByRole("button", { name: /new/i }).first().click();
+      await page.waitForTimeout(500);
+      await page.getByText("New Contact", { exact: false }).first().click();
+    });
+    await page.waitForTimeout(1500);
+    await page.locator('input[name="firstName"], input[placeholder*="First"]').first().fill(firstName);
+    await page.locator('input[name="lastName"], input[placeholder*="Last"]').first().fill(lastName);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForTimeout(2500);
+
+    const contract = apiContracts.resolveApprovedContract("lawcus.contacts.create");
+    const correlation = correlateObservation({
+      contract,
+      events: observer.events,
+      host: new URL(API_ORIGIN).hostname,
+      cardinality: "exactly_one",
+    });
+
+    // Never trust the create response's own uuid claim — re-derive it from
+    // the real post-save navigation (section 24 applies to creation too,
+    // not only updates).
+    const match = page.url().match(/\/contact\/([a-f0-9-]{36})/);
+    if (!match) throw new Error(`Could not determine the created contact's uuid from the post-save URL: ${page.url()}`);
+    return { uuid: match[1], correlation, events: observer.events };
+  } finally {
+    observer.dispose();
+    await page.close().catch(() => {});
+  }
+}
+
 /** Opens the contact, reads the named custom field's current value, and
  * closes without saving anything — a real, separate navigation used both
  * to capture before-state and for independent post-update verification

@@ -52,6 +52,58 @@ function fieldValueInput(page, fieldName) {
   return page.locator(`text=${fieldName}`).locator("..").locator('input[type="text"]').first();
 }
 
+/**
+ * Creates a brand-new Lead (Person "Potential Client" + its Matter) through
+ * the real "New Lead" two-step wizard and returns its real uuid,
+ * correlating the resulting network traffic against the approved
+ * lawcus.leads.create contract. Only sets the linked contact's First/Last
+ * Name and the lead's Matter Name — every default custom field on both
+ * steps is left at its default (empty) value.
+ */
+export async function createLeadViaBrowser({ context, apiContracts, firstName, lastName, matterName }) {
+  const observer = attachNetworkObserver(context);
+  const page = await context.newPage();
+  try {
+    await page.goto(STAGING + "/dashboard", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    await page.locator("text=Leads").first().click();
+    await page.waitForTimeout(1500);
+    await page.getByText("New Lead", { exact: false }).first().click().catch(async () => {
+      await page.getByRole("button", { name: /new/i }).first().click();
+      await page.waitForTimeout(500);
+      await page.getByText("New Lead", { exact: false }).first().click();
+    });
+    await page.waitForTimeout(1500);
+    await page.locator('input[name="firstName"], input[placeholder*="First"]').first().fill(firstName);
+    await page.locator('input[name="lastName"], input[placeholder*="Last"]').first().fill(lastName);
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.waitForTimeout(1200);
+    await page.getByLabel("Matter Name", { exact: false }).fill(matterName).catch(async () => {
+      await page.locator('input[name="name"], input[placeholder*="Matter Name"]').first().fill(matterName);
+    });
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForTimeout(2500);
+
+    const contract = apiContracts.resolveApprovedContract("lawcus.leads.create");
+    const correlation = correlateObservation({
+      contract,
+      events: observer.events,
+      host: new URL(API_ORIGIN).hostname,
+      cardinality: "exactly_one",
+    });
+
+    // Never trust the create response's own uuid claim — re-derive it from
+    // the real post-save navigation (section 24 applies to creation too,
+    // not only updates).
+    const match = page.url().match(/\/lead\/([a-f0-9-]{36})/);
+    if (!match) throw new Error(`Could not determine the created lead's uuid from the post-save URL: ${page.url()}`);
+    return { uuid: match[1], correlation, events: observer.events };
+  } finally {
+    observer.dispose();
+    await page.close().catch(() => {});
+  }
+}
+
 /** Opens the lead, reads the named MATTER-scoped custom field's current
  * value, and closes without saving — used both to capture before-state
  * and for independent post-update verification (section 24). */

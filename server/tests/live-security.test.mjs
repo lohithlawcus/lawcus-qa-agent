@@ -19,26 +19,31 @@ test('Staging blocks other tenants, metadata, credentialed URLs and business wri
  assert.equal(permitLiveRequest(API_ORIGIN+'/forcelogout','DELETE','fetch'),false);
  assert.equal(permitLiveRequest(ASSETS+'/app.js','GET','script'),true);
 });
-test('Contacts policy is permitLiveRequest plus exactly one write shape — PUT /contacts/:uuid — nothing broader',()=>{
+test('Contacts policy is permitLiveRequest plus exactly two write shapes — PUT /contacts/:uuid and POST /contacts — nothing broader',()=>{
  assert.equal(permitContactsRequest(API_ORIGIN+'/login','POST','fetch'),true);
  assert.equal(permitContactsRequest(ASSETS+'/app.js','GET','script'),true);
  assert.equal(permitContactsRequest(API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT','fetch'),true);
+ assert.equal(permitContactsRequest(API_ORIGIN+'/contacts','POST','fetch'),true);
  for(const [url,method] of [
   [API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','DELETE'],
   [API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','POST'],
   [API_ORIGIN+'/contacts/not-a-uuid','PUT'],
+  [API_ORIGIN+'/contacts','PUT'],
+  [API_ORIGIN+'/contacts','DELETE'],
+  [API_ORIGIN+'/v2/contacts','POST'],
   [API_ORIGIN+'/customfields','PUT'],
   [API_ORIGIN+'/matters/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
   ['https://user:password@'+API_ORIGIN.replace('https://','')+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
  ])assert.equal(permitContactsRequest(url,method,'fetch'),false,`${method} ${url}`);
 });
-test('Leads policy is permitLiveRequest plus exactly one write shape — PUT /leads (no :uuid segment) — nothing broader',()=>{
+test('Leads policy is permitLiveRequest plus exactly one write path (/leads, PUT for update or POST for create, no :uuid segment) — nothing broader',()=>{
  assert.equal(permitLeadsRequest(API_ORIGIN+'/login','POST','fetch'),true);
  assert.equal(permitLeadsRequest(ASSETS+'/app.js','GET','script'),true);
  assert.equal(permitLeadsRequest(API_ORIGIN+'/leads','PUT','fetch'),true);
+ assert.equal(permitLeadsRequest(API_ORIGIN+'/leads','POST','fetch'),true);
  for(const [url,method] of [
   [API_ORIGIN+'/leads','DELETE'],
-  [API_ORIGIN+'/leads','POST'],
+  [API_ORIGIN+'/leads/c59e9ec0-b115-11f1-b4fe-1feb32eda16d','POST'],
   [API_ORIGIN+'/leads/c59e9ec0-b115-11f1-b4fe-1feb32eda16d','PUT'],
   [API_ORIGIN+'/v2/leads','PUT'],
   [API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
