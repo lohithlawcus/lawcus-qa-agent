@@ -74,7 +74,15 @@ export async function createContactViaBrowser({ context, apiContracts, firstName
     await page.locator('input[name="firstName"], input[placeholder*="First"]').first().fill(firstName);
     await page.locator('input[name="lastName"], input[placeholder*="Last"]').first().fill(lastName);
     await page.getByRole("button", { name: "Save", exact: true }).click();
-    await page.waitForTimeout(2500);
+    // Real observed flakiness (2 of 13 live runs on 2026-09-16, both with
+    // durations well inside the normal range — not a slow/timed-out
+    // login): a fixed short wait here sometimes sampled the URL while
+    // Lawcus was still briefly showing the Contacts list, before its own
+    // client-side navigation to the new contact's detail page had landed.
+    // Actively wait for the real detail-page URL pattern instead of
+    // guessing a fixed delay; .catch() lets a genuine failure still reach
+    // the clear error below rather than surfacing waitForURL's own.
+    await page.waitForURL(/\/contact\/[a-f0-9-]{36}/, { timeout: 15000 }).catch(() => {});
 
     const contract = apiContracts.resolveApprovedContract("lawcus.contacts.create");
     const correlation = correlateObservation({

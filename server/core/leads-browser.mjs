@@ -82,7 +82,15 @@ export async function createLeadViaBrowser({ context, apiContracts, firstName, l
       await page.locator('input[name="name"], input[placeholder*="Matter Name"]').first().fill(matterName);
     });
     await page.getByRole("button", { name: "Save", exact: true }).click();
-    await page.waitForTimeout(2500);
+    // Real observed flakiness (2026-09-16, same shape and root cause as
+    // contacts-browser.mjs's createContactViaBrowser — see its comment):
+    // a fixed short wait here sometimes sampled the URL while Lawcus was
+    // still briefly showing the Leads list, before its own client-side
+    // navigation to the new lead's detail page had landed (78s duration
+    // observed vs. a normal ~41-62s range — genuinely extra real time
+    // elapsed, not a login timeout). Actively wait for the real
+    // detail-page URL pattern instead of guessing a fixed delay.
+    await page.waitForURL(/\/lead\/[a-f0-9-]{36}/, { timeout: 15000 }).catch(() => {});
 
     const contract = apiContracts.resolveApprovedContract("lawcus.leads.create");
     const correlation = correlateObservation({
