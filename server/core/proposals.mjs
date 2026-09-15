@@ -27,6 +27,7 @@ const NON_HUMAN_ORIGINS = new Set([
   "ai_planner",
   "recorder",
   "network_observer",
+  "impacted_testing",
 ]);
 
 const DEFAULT_TTL_HOURS = 72;

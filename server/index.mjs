@@ -1,4 +1,6 @@
-import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession} from './core/live-runner.mjs';
+import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession,runContactCustomFieldCheck,runLeadCustomFieldCheck,runContactCreationCheck,runLeadCreationCheck} from './core/live-runner.mjs';
+import { seedLawcusNativeCases } from './testbook/lawcus-native-cases.mjs';
+import { planImpactedTest, proposeGapCoverage, executeImpactedTest } from './core/impacted-testing.mjs';
 import { openPersonas, PersonaRegistration } from './core/personas.mjs';
 import { openAuthoringSessions, AuthoringSessionRequest, AuthoringDiscardRequest } from './core/authoring-sessions.mjs';
 import { normalizeCandidateActions, matchActionsToPrimitives, buildProposalSpecs } from './core/recorder.mjs';
@@ -21,6 +23,7 @@ import {
   RunRequest,
   AnswerRequest,
   DecisionRequest,
+  ImpactedTestRequest,
   createPlan,
   validateExecution,
   descriptions,
@@ -78,6 +81,10 @@ testbook.backfillHistory(
     ]),
   ),
 );
+// V5 Step 16 — registers Step 15's real, already-live-verified Contact/Lead
+// browser primitives as real TestBook coverage, so the Impact Graph's gap
+// detection has genuine cases to check against.
+seedLawcusNativeCases(testbook);
 const knowledge = openKnowledge(db, audit);
 // V5 Step 9 — proposes the real, sourced Contacts/Leads/Contact Custom
 // Fields extraction and the self-verified Authentication items. Every
@@ -848,6 +855,84 @@ const server = createServer(
             ? knowledge.approveEdge(id, approverIdentity, input.note ?? null)
             : knowledge.rejectEdge(id, approverIdentity, input.note ?? null);
         json(res, 200, { status: result.status });
+        return;
+      }
+      // V5 Step 16 — Natural-Language Impacted Testing (section 42's flow):
+      // local intent -> Impact Graph -> approved Knowledge -> TestBook
+      // coverage -> gap detection. Pure and side-effect-free — safe to call
+      // freely while exploring a prompt before committing to a real run.
+      if (req.method === "POST" && pathname === "/impacted-tests/plan") {
+        const input = ImpactedTestRequest.parse(await body(req));
+        const plan = planImpactedTest({ intent: input.intent, knowledge, testbook });
+        json(res, 200, plan);
+        return;
+      }
+      if (req.method === "POST" && pathname === "/impacted-tests/run") {
+        const input = ImpactedTestRequest.parse(await body(req));
+        if (!browserStatus.ready) { json(res, 409, { error: "Check the browser connection in Environment first." }); return; }
+        const login = await keychain("exists", "lawcus-login");
+        if (!login.exists) { json(res, 409, { error: "Save your staging account in Environment first." }); return; }
+        const recent = db.prepare("SELECT COUNT(*) n FROM runs JOIN runbooks ON runbooks.id=runs.runbook_id WHERE runbooks.environment_id='lawcus' AND runs.started_at>?").get(new Date(Date.now() - 600000).toISOString());
+        if (recent.n >= 3) { json(res, 429, { error: "Three staging runs were started in ten minutes. Please wait before more." }); return; }
+        if (connecting() || savingCredentials || checkingBrowser || db.prepare("SELECT 1 FROM runs WHERE status='running'").get()) {
+          json(res, 409, { error: "A test is already running. Wait for it to finish before starting another." });
+          return;
+        }
+        const plan = planImpactedTest({ intent: input.intent, knowledge, testbook });
+        if (!plan.matched) { json(res, 200, { plan, results: [], filedProposals: [] }); return; }
+
+        const runbookId = randomUUID();
+        db.prepare("INSERT INTO runbooks VALUES(?,?,?,?,?,?,?,?)").run(
+          runbookId, 1, "lawcus", `Impacted test: ${plan.subjectFeatureName}`, input.intent, "impacted-testing",
+          JSON.stringify({ scenarios: plan.cells.map((c) => c.externalId) }), now(),
+        );
+        const runId = randomUUID();
+        db.prepare("INSERT INTO runs(id,runbook_id,status,replay,started_at) VALUES(?,?,?,?,?)").run(runId, runbookId, "running", 0, now());
+        audit("impacted_test.started", runId, { intent: input.intent, cells: plan.cells.length, gaps: plan.gaps.length });
+
+        // Real, owned staging fixtures from Step 15's own live-verified work
+        // (see the project memory note on those commits) — not invented
+        // here, and never used for any prompt this router doesn't
+        // explicitly recognize.
+        const KNOWN_CONTACT_UUID = "e2bf71a0-ae87-11f1-ab8e-f18331cbd381"; // "QA Batch Test"
+        const KNOWN_LEAD_UUID = "c59e9ec0-b115-11f1-b4fe-1feb32eda16d"; // "QA Agent - 1789484203935"
+        const ts = Date.now();
+        const runners = {
+          "contacts.custom_field_update_existing": async () => {
+            const r = await runContactCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_CONTACT_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
+            return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
+          },
+          "contacts.create_new_verifies_custom_fields": async () => {
+            const r = await runContactCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts) });
+            return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
+          },
+          "leads.custom_field_update_existing": async () => {
+            const r = await runLeadCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_LEAD_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
+            return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
+          },
+          "leads.create_new_verifies_custom_fields": async () => {
+            const r = await runLeadCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts + 1), matterName: `QA Agent - ${ts + 1}` });
+            return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
+          },
+        };
+
+        let results = [];
+        let filedProposals = [];
+        try {
+          results = await executeImpactedTest({ plan, runners, db, runId, testbook });
+          filedProposals = proposeGapCoverage({ proposals, plan });
+          const anyFailed = results.some((r) => r.executed && r.status === "failed");
+          db.prepare("UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?").run(
+            anyFailed ? "failed" : "passed", now(),
+            `${results.filter((r) => r.executed).length} covered cell(s) executed, ${plan.gaps.length} gap(s) proposed for review.`,
+            runId,
+          );
+        } catch (error) {
+          db.prepare("UPDATE runs SET status='failed',finished_at=?,summary=? WHERE id=?").run(now(), `Execution error: ${error.message}`, runId);
+          throw error;
+        }
+        audit("impacted_test.completed", runId, { results: results.length, filedProposals: filedProposals.length });
+        json(res, 200, { runId, plan, results, filedProposals });
         return;
       }
       const apiContractDecision = /^\/api-contracts\/([a-f0-9-]{36})\/(approve|reject)$/.exec(

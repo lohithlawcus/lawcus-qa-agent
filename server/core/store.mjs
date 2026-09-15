@@ -172,6 +172,21 @@ export function openStore(directory) {
       db.exec("COMMIT");
     } catch (error) { db.exec("ROLLBACK"); throw error; }
   }
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=16").get()) {
+    // This migration rebuilds `proposals` (SQLite can't ALTER a CHECK
+    // constraint in place), same pattern as migration 006's `runs` rebuild.
+    db.exec("PRAGMA foreign_keys=OFF");
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(readFileSync(new URL("../migrations/016_impacted_testing_origin.sql", import.meta.url), "utf8"));
+      db.prepare("INSERT INTO schema_migrations VALUES(16,?)").run(now());
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    db.exec("PRAGMA foreign_keys=ON");
+    const inconsistentProposals = db.prepare("PRAGMA foreign_key_check").all();
+    if (inconsistentProposals.length)
+      throw new Error(`Migration 16 left inconsistent foreign keys: ${JSON.stringify(inconsistentProposals)}`);
+  }
   const stale = db.prepare("SELECT id FROM runs WHERE status='running'").all();
   db.prepare(
     "UPDATE runs SET status='interrupted',finished_at=?,summary='The runner stopped before this run completed. Review the partial results before running again.' WHERE status='running'",

@@ -27,6 +27,7 @@ import {
   Waypoints,
   Users,
   Video,
+  GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -277,6 +278,32 @@ type Plan = {
   scenarios: { key: string; title: string; expected: string }[];
   source: string;
 };
+type ImpactedCell = {
+  featureName: string;
+  recordState: string;
+  externalId: string;
+  covered: boolean;
+  testCaseId: string | null;
+  currentVersion: number | null;
+  executed?: boolean;
+  status?: string;
+  actual?: string;
+};
+type ImpactedPlan = {
+  normalizedIntent: string;
+  matched: boolean;
+  subjectFeatureName?: string;
+  features: string[];
+  knowledgeItems: { id: string; semantic_id: string; title: string }[];
+  cells: ImpactedCell[];
+  gaps: ImpactedCell[];
+};
+type ImpactedRunResult = {
+  runId?: string;
+  plan: ImpactedPlan;
+  results: ImpactedCell[];
+  filedProposals: { id: string; summary: string }[];
+};
 async function request<T = Record<string, string>>(
   path: string,
   body?: unknown,
@@ -328,6 +355,11 @@ export default function Home() {
   const [authoringForm, setAuthoringForm] = useState({ environmentId: "fixture", featureName: "", workflowDescription: "" });
   const [activeAuthoringSession, setActiveAuthoringSession] = useState<AuthoringSession | null>(null);
   const [authoringLiveCount, setAuthoringLiveCount] = useState(0);
+  const [impactedIntent, setImpactedIntent] = useState(
+    "Update a contact custom field and check how it appears for existing/new Contact and Lead.",
+  );
+  const [impactedPlan, setImpactedPlan] = useState<ImpactedPlan | null>(null);
+  const [impactedResult, setImpactedResult] = useState<ImpactedRunResult | null>(null);
   const refresh = useCallback(async () => {
     setState(await request<State>("/state"));
   }, []);
@@ -402,6 +434,20 @@ export default function Home() {
       });
       setDetail(await request<Detail>("/runs/" + run.id));
       setTab("workspace");
+      await refresh();
+    });
+  }
+  async function planImpacted() {
+    await action(async () => {
+      setImpactedResult(null);
+      setImpactedPlan(await request<ImpactedPlan>("/impacted-tests/plan", { intent: impactedIntent }));
+    });
+  }
+  async function runImpacted() {
+    await action(async () => {
+      const result = await request<ImpactedRunResult>("/impacted-tests/run", { intent: impactedIntent });
+      setImpactedResult(result);
+      setImpactedPlan(result.plan);
       await refresh();
     });
   }
@@ -645,6 +691,10 @@ export default function Home() {
               <ListChecks />
               TestBook
             </TabsTrigger>
+            <TabsTrigger value="impacted">
+              <GitBranch />
+              Impacted Testing
+            </TabsTrigger>
             <TabsTrigger value="history">
               <History />
               Run history
@@ -696,6 +746,8 @@ export default function Home() {
                   ? "What would you like to test?"
                   : tab === "testbook"
                     ? "The record of what's actually proven"
+                    : tab === "impacted"
+                      ? "Ask in plain English. See what's already proven, and what isn't."
                       : tab === "history"
                         ? "Every run, accounted for"
                         : tab === "proposals"
@@ -717,6 +769,8 @@ export default function Home() {
                   ? "Describe the intent. Review the checks. Let the runner handle the steps."
                   : tab === "testbook"
                     ? "Feature → suite → test case, each on a versioned definition, with its real execution history."
+                    : tab === "impacted"
+                      ? "Local intent → Impact Graph → approved Knowledge → TestBook coverage → gap detection. No AI call unless a gap needs one proposed."
                       : tab === "history"
                         ? "Results and evidence are retained, including failed and interrupted runs."
                         : tab === "proposals"
@@ -1165,6 +1219,81 @@ export default function Home() {
                     ))}
                   </div>
                 ))
+              )}
+            </div>
+          </TabsContent>
+          <TabsContent value="impacted">
+            <div className="panel">
+              <span className="section-label">ASK IN PLAIN ENGLISH</span>
+              <Textarea
+                value={impactedIntent}
+                onChange={(e) => setImpactedIntent(e.target.value)}
+                maxLength={1000}
+                placeholder="Update a contact custom field and check how it appears for existing/new Contact and Lead."
+              />
+              <div className="inline">
+                <Button variant="outline" disabled={busy} onClick={planImpacted}>
+                  <GitBranch />
+                  Check coverage
+                </Button>
+                <Button disabled={busy} onClick={runImpacted}>
+                  <Play />
+                  Run real checks
+                </Button>
+              </div>
+              {impactedPlan && !impactedPlan.matched && (
+                <p className="subtle">
+                  Not recognized locally yet — this exact prompt isn&apos;t one
+                  of the patterns this project knows how to route without a
+                  human teaching it a new one first.
+                </p>
+              )}
+              {impactedPlan && impactedPlan.matched && (
+                <>
+                  <p className="subtle">
+                    Subject: {impactedPlan.subjectFeatureName} · Impact Graph
+                    reached: {impactedPlan.features.join(", ")}
+                  </p>
+                  <p className="subtle">
+                    {impactedPlan.knowledgeItems.length} approved Knowledge
+                    item(s) relevant.
+                  </p>
+                  {impactedPlan.cells.map((cell) => {
+                    const executed = impactedResult?.results.find(
+                      (r) => r.externalId === cell.externalId,
+                    );
+                    return (
+                      <div className="list-row" key={cell.externalId}>
+                        <div>
+                          <h3>
+                            {cell.featureName} — {cell.recordState} record
+                          </h3>
+                          <p className="subtle">{cell.externalId}</p>
+                          {executed?.actual && (
+                            <p className="small-note">{executed.actual}</p>
+                          )}
+                        </div>
+                        <Badge
+                          className={executed ? "status " + executed.status : ""}
+                          variant="outline"
+                        >
+                          {executed
+                            ? executed.status
+                            : cell.covered
+                              ? "covered"
+                              : "gap"}
+                        </Badge>
+                      </div>
+                    );
+                  })}
+                  {impactedResult && impactedResult.filedProposals.length > 0 && (
+                    <p className="subtle">
+                      {impactedResult.filedProposals.length} NEW_TEST
+                      proposal(s) filed for review in the Proposals tab —
+                      nothing runs for an unapproved cell.
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </TabsContent>

@@ -35,6 +35,9 @@ export const AnswerRequest = z
 export const DecisionRequest = z
   .object({ note: z.string().trim().min(1).max(1000).optional() })
   .strict();
+export const ImpactedTestRequest = z
+  .object({ intent: z.string().trim().min(3).max(1000) })
+  .strict();
 export const descriptions = {
   valid_login: {
     title: "Sign in with the dedicated test account",
