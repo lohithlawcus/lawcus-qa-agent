@@ -34,6 +34,10 @@ import { openEnvironmentAdapter, API_ORIGIN, STAGING, ASSETS } from "./core/envi
 import { openNetworkAuthority } from "./core/network-authority.mjs";
 import { createSafeApiClient } from "./core/api-client.mjs";
 import { openNetworkObservations } from "./core/network-observations.mjs";
+import { openResourceOwnership } from "./core/resource-ownership.mjs";
+import { openResourceLocks } from "./core/resource-locks.mjs";
+import { openMutationJournal } from "./core/mutation-journal.mjs";
+import { createCleanupRunner } from "./core/cleanup.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -108,6 +112,29 @@ const networkObservations = openNetworkObservations(db, audit);
 // persona is cheap/reversible; only verifyPersonaInBrowser's visible
 // sign-in (wired below) can ever move one to 'verified'.
 const personas = openPersonas(db, audit);
+// V5 Step 13 — Resource Ownership + Locks + Mutation Journal (sections
+// 25-28). No feature registers delete/restore handlers yet (no real
+// mutating primitive exists until Step 15's Contacts/Custom Fields/Leads
+// milestone), so cleanup below runs as a real, honest no-op today — the
+// orchestration is wired in now so it's already exercised by every real
+// run rather than bolted on later once there's something to actually clean.
+const resourceOwnership = openResourceOwnership(db, audit);
+const resourceLocks = openResourceLocks(db, audit);
+const mutationJournal = openMutationJournal(db, audit);
+const cleanupRunner = createCleanupRunner({ resourceOwnership, mutationJournal, resourceLocks });
+// A lock left 'held' by a run that crashed before releasing it (matching
+// store.mjs's own stale-run recovery) is recoverable, never a permanent
+// deadlock (section 26).
+resourceLocks.recoverStale();
+// Section 28 also requires cleanup after "interruption/recovery" — a run
+// store.mjs just marked 'interrupted' at startup (the process crashed
+// mid-run) never goes through the execute() promise chain below, so it
+// would otherwise never get a cleanup pass at all.
+for (const row of db.prepare("SELECT id FROM runs WHERE status='interrupted' AND cleanup_status IS NULL").all())
+  void cleanupRunner
+    .runCleanup({ runId: row.id, deleteHandlers: {}, restoreHandlers: {} })
+    .then((result) => db.prepare("UPDATE runs SET cleanup_status=? WHERE id=?").run(result.overall, row.id))
+    .catch(() => db.prepare("UPDATE runs SET cleanup_status='failed' WHERE id=?").run(row.id));
 // section 14: only an interactive operator identity may approve or reject —
 // never the runner, AI planner, recorder or network observer. This service
 // is single-operator (one Mac, one local session), so the OS account name
@@ -186,6 +213,9 @@ function runDetail(id) {
     cancellable: activeRuns.has(id),
     networkObservations: observed.network,
     consoleObservations: observed.console,
+    resourceOwnership: resourceOwnership.forRun(id),
+    resourceLocks: resourceLocks.forRun(id),
+    mutationJournal: mutationJournal.forRun(id),
   };
 }
 const server = createServer(
@@ -569,11 +599,24 @@ const server = createServer(
           networkObservations,
           ...(controller ? { signal: controller.signal } : {}),
         })
-          .finally(() => activeRuns.delete(id))
           .catch(() => {
             db.prepare(
               "UPDATE runs SET status='interrupted',finished_at=?,summary='Execution stopped unexpectedly.' WHERE id=?",
             ).run(now(), id);
+          })
+          .finally(async () => {
+            activeRuns.delete(id);
+            // Section 28: cleanup runs after pass, failure, cancellation
+            // OR interruption — unconditionally, here, regardless of how
+            // execute() settled. It never touches runs.status; only its
+            // own separate cleanup_status column.
+            try {
+              const result = await cleanupRunner.runCleanup({ runId: id, deleteHandlers: {}, restoreHandlers: {} });
+              db.prepare("UPDATE runs SET cleanup_status=? WHERE id=?").run(result.overall, id);
+              audit("run.cleanup-completed", id, { overall: result.overall });
+            } catch {
+              db.prepare("UPDATE runs SET cleanup_status='failed' WHERE id=?").run(id);
+            }
           });
         json(res, 202, { id });
         return;

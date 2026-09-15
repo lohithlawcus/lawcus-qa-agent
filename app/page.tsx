@@ -51,6 +51,7 @@ type Run = {
   summary: string;
   started_at: string;
   model_calls: number;
+  cleanup_status: string | null;
 };
 type Book = {
   id: string;
@@ -788,6 +789,11 @@ export default function Home() {
                           )}
                           {detail.status.replaceAll("_", " ")}
                         </Badge>
+                        {detail.cleanup_status && (
+                          <Badge variant="outline" className={"status " + detail.cleanup_status}>
+                            cleanup: {detail.cleanup_status.replaceAll("_", " ")}
+                          </Badge>
+                        )}
                       </div>
                     </div>
                     <p className="report-summary" aria-live="polite">
