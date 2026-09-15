@@ -124,6 +124,14 @@ export function openStore(directory) {
       db.exec("COMMIT");
     } catch (error) { db.exec("ROLLBACK"); throw error; }
   }
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=10").get()) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(readFileSync(new URL("../migrations/010_api_contracts.sql", import.meta.url), "utf8"));
+      db.prepare("INSERT INTO schema_migrations VALUES(10,?)").run(now());
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+  }
   const stale = db.prepare("SELECT id FROM runs WHERE status='running'").all();
   db.prepare(
     "UPDATE runs SET status='interrupted',finished_at=?,summary='The runner stopped before this run completed. Review the partial results before running again.' WHERE status='running'",

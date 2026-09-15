@@ -1,7 +1,7 @@
 import {runLive,checkBrowser,liveDescriptions,connectInBrowser} from './core/live-runner.mjs';
 import { createModelRouter, recordModelUsage } from './ai/router.mjs';
 import { createOpenAIProvider } from './ai/providers/openai.mjs';
-import {keychain} from './core/secrets.mjs';
+import {keychain, readSecret} from './core/secrets.mjs';
 import {openEvidence} from './core/setup.mjs';
 import {readFile} from 'node:fs/promises';
 import {CredentialSetup,setupStatus,saveCredentials} from './core/setup.mjs';
@@ -27,6 +27,11 @@ import { buildRunManifest, ManifestError } from "./core/manifest.mjs";
 import { resolveIntent } from "./core/intent.mjs";
 import { openKnowledge } from "./core/knowledge.mjs";
 import { seedLawcusKnowledge } from "./knowledge/lawcus-seed.mjs";
+import { openApiContracts } from "./core/api-contracts.mjs";
+import { seedLawcusApiContracts } from "./api-contracts/lawcus-seed.mjs";
+import { openEnvironmentAdapter, API_ORIGIN, STAGING, ASSETS } from "./core/environment-adapter.mjs";
+import { openNetworkAuthority } from "./core/network-authority.mjs";
+import { createSafeApiClient } from "./core/api-client.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -68,6 +73,31 @@ const knowledge = openKnowledge(db, audit);
 // Fields extraction and the self-verified Authentication items. Every
 // item/edge lands as pending_review; nothing here approves anything.
 seedLawcusKnowledge(knowledge);
+// V5 Step 10 — API Contract Registry + Environment Adapter + Network
+// Authority. Proposes the one real (OBSERVED_API, unapproved) login
+// contract and the "lawcus" environment's adapter/network policy at
+// startup — all pending_review, exactly like Knowledge. Nothing here
+// grants the Safe API Executor any authority; that only happens once an
+// operator approves each of the three independently (section 21).
+const apiContracts = openApiContracts(db, audit);
+seedLawcusApiContracts(apiContracts);
+const environmentAdapter = openEnvironmentAdapter(db, audit);
+environmentAdapter.proposeAdapter({
+  environmentId: "lawcus",
+  apiOrigin: API_ORIGIN,
+  appOrigin: STAGING,
+  assetsOrigin: ASSETS,
+});
+const networkAuthority = openNetworkAuthority(db, audit);
+networkAuthority.proposeAuthority({
+  environmentId: "lawcus",
+  // Only what the one seeded contract (POST /login) actually needs —
+  // least privilege, not a general-purpose allowance (section 21).
+  allowedHosts: [new URL(API_ORIGIN).hostname],
+  allowedMethods: ["POST"],
+  allowRedirects: false,
+});
+const apiClient = createSafeApiClient({ environmentAdapter, networkAuthority, apiContracts });
 // section 14: only an interactive operator identity may approve or reject —
 // never the runner, AI planner, recorder or network observer. This service
 // is single-operator (one Mac, one local session), so the OS account name
@@ -239,6 +269,36 @@ const server = createServer(
         if(connecting()||savingCredentials||db.prepare("SELECT 1 FROM runs WHERE status='running'").get()){json(res,409,{error:'Wait for the active operation before changing credentials.'});return;}
         savingCredentials=true;try{const result=await saveCredentials(input);audit('setup.credential-saved',input.kind,{storage:'macOS Keychain'});json(res,200,result);}finally{savingCredentials=false;}return;
       }
+      // V5 Step 10 / Milestone 2 DoD — "one real authorized staging contract
+      // verified end-to-end". Purpose-built to exactly one contract, not a
+      // generic "call any approved contract with any body" endpoint: this
+      // service must never let a client dictate what real request reaches
+      // staging (section 22). It reuses the exact safe negative-credential
+      // pattern already proven in live-runner.mjs's invalid_password
+      // scenario — a deliberately wrong password, so the call can never
+      // authenticate or mutate anything real.
+      if (req.method === "POST" && pathname === "/api-contracts/verify-login") {
+        if (db.prepare("SELECT 1 FROM runs WHERE status='running'").get()) {
+          json(res, 409, { error: "Wait for the active run to finish." });
+          return;
+        }
+        const creds = JSON.parse(await readSecret("lawcus-login"));
+        const result = await apiClient.execute({
+          environmentId: "lawcus",
+          semanticId: "lawcus.auth.login",
+          requestBody: { email: creds.username, password: randomBytes(24).toString("hex") },
+        });
+        audit("api_contract.verified", "lawcus.auth.login", {
+          status: result.status,
+          contractMatch: result.contractMatch,
+        });
+        json(res, 200, {
+          status: result.status,
+          contractMatch: result.contractMatch,
+          mismatchReason: result.mismatchReason,
+        });
+        return;
+      }
       if (req.method === "GET" && pathname === "/state") {
         json(res, 200, {
           environments: db.prepare("SELECT * FROM environments").all(),
@@ -265,6 +325,12 @@ const server = createServer(
             edges: knowledge.inboxEdges(),
           },
           knowledgeApproved: knowledge.approvedByFeature(),
+          apiContractsInbox: apiContracts.inbox(),
+          apiContractsApproved: apiContracts.approvedByFeature(),
+          environmentAdaptersInbox: environmentAdapter.inbox(),
+          environmentAdaptersApproved: environmentAdapter.approved(),
+          networkAuthoritiesInbox: networkAuthority.inbox(),
+          networkAuthoritiesApproved: networkAuthority.approved(),
           audit: db
             .prepare(
               "SELECT * FROM audit_events ORDER BY sequence DESC LIMIT 30",
@@ -585,6 +651,45 @@ const server = createServer(
           verb === "approve"
             ? knowledge.approveEdge(id, approverIdentity, input.note ?? null)
             : knowledge.rejectEdge(id, approverIdentity, input.note ?? null);
+        json(res, 200, { status: result.status });
+        return;
+      }
+      const apiContractDecision = /^\/api-contracts\/([a-f0-9-]{36})\/(approve|reject)$/.exec(
+        pathname,
+      );
+      if (req.method === "POST" && apiContractDecision) {
+        const [, id, verb] = apiContractDecision;
+        const input = DecisionRequest.parse(await body(req));
+        const result =
+          verb === "approve"
+            ? apiContracts.approveContract(id, approverIdentity, input.note ?? null)
+            : apiContracts.rejectContract(id, approverIdentity, input.note ?? null);
+        json(res, 200, { status: result.status });
+        return;
+      }
+      const environmentAdapterDecision = /^\/environment-adapters\/([a-f0-9-]{36})\/(approve|reject)$/.exec(
+        pathname,
+      );
+      if (req.method === "POST" && environmentAdapterDecision) {
+        const [, id, verb] = environmentAdapterDecision;
+        const input = DecisionRequest.parse(await body(req));
+        const result =
+          verb === "approve"
+            ? environmentAdapter.approveAdapter(id, approverIdentity, input.note ?? null)
+            : environmentAdapter.rejectAdapter(id, approverIdentity, input.note ?? null);
+        json(res, 200, { status: result.status });
+        return;
+      }
+      const networkAuthorityDecision = /^\/network-authorities\/([a-f0-9-]{36})\/(approve|reject)$/.exec(
+        pathname,
+      );
+      if (req.method === "POST" && networkAuthorityDecision) {
+        const [, id, verb] = networkAuthorityDecision;
+        const input = DecisionRequest.parse(await body(req));
+        const result =
+          verb === "approve"
+            ? networkAuthority.approveAuthority(id, approverIdentity, input.note ?? null)
+            : networkAuthority.rejectAuthority(id, approverIdentity, input.note ?? null);
         json(res, 200, { status: result.status });
         return;
       }

@@ -7,9 +7,11 @@ import {sealEvidence,saveCredentials,CredentialSetup} from './setup.mjs';
 import {startEgress} from './egress.mjs';
 import {Plan} from './contracts.mjs';
 import {now} from './store.mjs';
-export const STAGING='https://lohith.fiveriverz.com';
-export const API_ORIGIN='https://api.fiveriverz.com';
-export const ASSETS='https://daewtpgqtk7am.cloudfront.net';
+// V5 Step 10 / section 20 — these origins now live in one place
+// (environment-adapter.mjs); re-exported here unchanged so nothing else
+// that already imports them from live-runner.mjs has to change.
+import {STAGING,API_ORIGIN,ASSETS} from './environment-adapter.mjs';
+export {STAGING,API_ORIGIN,ASSETS};
 export const liveDescriptions={
  valid_login:{title:'Sign in to the authorized staging workspace',expected:'The staging workspace opens and its profile menu identifies the dedicated QA account.'},
  password_masked:{title:'Keep the password concealed',expected:'The staging login password input masks typed characters.'},

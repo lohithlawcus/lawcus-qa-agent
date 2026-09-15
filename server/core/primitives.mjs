@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { validateShape, validateResponseAgainstContract } from "./schema-shape.mjs";
 
 // V5 section 12 / migration Step 3 — Approved Primitive Registry.
 //
@@ -113,6 +114,42 @@ async function authAssertProtectedRouteBlocked({ page, origin }) {
     throw new Error(
       "The protected workspace was reachable without an authenticated session.",
     );
+}
+
+// --- API primitives, V5 Step 10 / section 22 --------------------------
+// The Safe API Executor (server/core/api-client.mjs) instance travels
+// through the DSL scope like `page` does for UI primitives (e.g.
+// `${ctx.apiClient}`) — these primitives never construct one themselves,
+// so nothing here can bypass the environment/network authority it was
+// built with.
+
+async function apiCall({ apiClient, environmentId, semanticId, pathParams, query, requestBody, runId }) {
+  return apiClient.execute({
+    environmentId,
+    semanticId,
+    pathParams: pathParams || {},
+    query: query || {},
+    requestBody: requestBody ?? null,
+    runId: runId ?? null,
+  });
+}
+
+async function apiAssertRequestContract({ apiContracts, semanticId, requestBody }) {
+  const contract = apiContracts.resolveApprovedContract(semanticId);
+  if (!contract.requestSchema) return { ok: true };
+  const errors = validateShape(contract.requestSchema, requestBody ?? {});
+  if (errors.length)
+    throw new Error(`The outgoing request does not match the approved contract: ${errors.join("; ")}`);
+  return { ok: true };
+}
+
+async function apiAssertResponseContract({ apiContracts, semanticId, status, body }) {
+  const contract = apiContracts.resolveApprovedContract(semanticId);
+  if (!contract.expectedStatuses.includes(status))
+    throw new Error(`Unexpected status ${status}; expected one of ${contract.expectedStatuses.join(", ")}.`);
+  const errors = validateResponseAgainstContract(contract.responseSchema, status, body);
+  if (errors.length) throw new Error(`Response shape drift: ${errors.join("; ")}`);
+  return { ok: true };
 }
 
 // --- Registry ---------------------------------------------------------
@@ -286,6 +323,52 @@ register({
   impl: authAssertProtectedRouteBlocked,
   approvedHash:
     "5045fc6b2621dbbe71cd06b532ab5a8c1271fbaa06ace283cc397be7854ac523",
+  approvedBy: "operator:lohithreddysripathi",
+  approvedAt: "2026-09-15T00:00:00.000Z",
+});
+
+register({
+  id: "api.call",
+  version: 1,
+  layer: "api",
+  action: "Execute one approved API contract through the Safe API Executor.",
+  status: "approved",
+  risk: "high",
+  dependencies: [],
+  sideEffects: ["network-request"],
+  networkAuthority: ["environment-origin"],
+  impl: apiCall,
+  approvedHash: "d2283114753ce8639f3fb18914894f6cdf477d468d3e83af0491baee0b40bdff",
+  approvedBy: "operator:lohithreddysripathi",
+  approvedAt: "2026-09-15T00:00:00.000Z",
+});
+register({
+  id: "api.assert_request_contract",
+  version: 1,
+  layer: "api",
+  action: "Assert an outgoing request body matches the approved contract's request schema.",
+  status: "approved",
+  risk: "low",
+  dependencies: [],
+  sideEffects: [],
+  networkAuthority: [],
+  impl: apiAssertRequestContract,
+  approvedHash: "289b9335ec30f7d8c89cd917eecd5b96dec110111f412b32904a56183c07c380",
+  approvedBy: "operator:lohithreddysripathi",
+  approvedAt: "2026-09-15T00:00:00.000Z",
+});
+register({
+  id: "api.assert_response_contract",
+  version: 1,
+  layer: "api",
+  action: "Assert a response status and body match the approved contract's response schema.",
+  status: "approved",
+  risk: "low",
+  dependencies: [],
+  sideEffects: [],
+  networkAuthority: [],
+  impl: apiAssertResponseContract,
+  approvedHash: "65d6f532a87104bbd712552574f40155caf70a5bbf05c4257a77b901e6acddb5",
   approvedBy: "operator:lohithreddysripathi",
   approvedAt: "2026-09-15T00:00:00.000Z",
 });

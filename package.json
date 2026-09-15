@@ -12,7 +12,7 @@
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "qa:service": "node server/index.mjs",
-    "test": "node --test server/tests/security.test.mjs server/tests/live-security.test.mjs server/tests/proposals.test.mjs server/tests/primitives.test.mjs server/tests/dsl.test.mjs server/tests/testbook.test.mjs server/tests/manifest.test.mjs server/tests/intent.test.mjs server/tests/ai-router.test.mjs server/tests/knowledge.test.mjs",
+    "test": "node --test server/tests/security.test.mjs server/tests/live-security.test.mjs server/tests/proposals.test.mjs server/tests/primitives.test.mjs server/tests/dsl.test.mjs server/tests/testbook.test.mjs server/tests/manifest.test.mjs server/tests/intent.test.mjs server/tests/ai-router.test.mjs server/tests/knowledge.test.mjs server/tests/schema-shape.test.mjs server/tests/api-contracts.test.mjs server/tests/environment-adapter.test.mjs server/tests/network-authority.test.mjs server/tests/api-client.test.mjs",
     "test:browser": "node --test server/tests/runner.test.mjs",
     "typecheck": "tsc --noEmit",
     "test:api": "node --test server/tests/api.test.mjs",
@@ -42,6 +42,7 @@
     "recharts": "^3.8.0",
     "sonner": "^2.0.8",
     "tailwind-merge": "3.6.0",
+    "undici": "^7.29.0",
     "vaul": "^1.1.2",
     "yaml": "2.9.1",
     "zod": "^3.25.76"

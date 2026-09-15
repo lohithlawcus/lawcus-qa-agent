@@ -19,6 +19,9 @@ const REGISTERED_IDS = [
   "auth.assert_authenticated_workspace",
   "auth.logout",
   "auth.assert_protected_route_blocked",
+  "api.call",
+  "api.assert_request_contract",
+  "api.assert_response_contract",
 ];
 
 test("every registered login primitive currently resolves (source matches its approved hash)", () => {

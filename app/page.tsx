@@ -24,6 +24,8 @@ import {
   ListChecks,
   Lightbulb,
   Network,
+  Webhook,
+  Waypoints,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -138,6 +140,38 @@ type KnowledgeEdge = {
   status: string;
 };
 type KnowledgeFeatureGroup = { feature: string; items: KnowledgeItem[] };
+type ApiContract = {
+  id: string;
+  semantic_id: string;
+  version: number;
+  feature_name: string;
+  operation: string;
+  method: string;
+  path_template: string;
+  read_write: string;
+  provenance: string;
+  status: string;
+  verification_requirements: string;
+};
+type ApiContractFeatureGroup = { feature: string; items: ApiContract[] };
+type EnvironmentAdapter = {
+  id: string;
+  environment_id: string;
+  version: number;
+  api_origin: string;
+  app_origin: string;
+  assets_origin: string | null;
+  status: string;
+};
+type NetworkAuthorityRow = {
+  id: string;
+  environment_id: string;
+  version: number;
+  allowed_hosts: string;
+  allowed_methods: string;
+  allow_redirects: number;
+  status: string;
+};
 type State = {
   environments: { id: string; name: string; url: string }[];
   runbooks: Book[];
@@ -147,6 +181,12 @@ type State = {
   testbook: Feature[];
   knowledgeInbox: { items: KnowledgeItem[]; edges: KnowledgeEdge[] };
   knowledgeApproved: KnowledgeFeatureGroup[];
+  apiContractsInbox: ApiContract[];
+  apiContractsApproved: ApiContractFeatureGroup[];
+  environmentAdaptersInbox: EnvironmentAdapter[];
+  environmentAdaptersApproved: EnvironmentAdapter[];
+  networkAuthoritiesInbox: NetworkAuthorityRow[];
+  networkAuthoritiesApproved: NetworkAuthorityRow[];
   audit: { id: string; action: string; created_at: string }[];
   planner: string;
 };
@@ -361,6 +401,42 @@ export default function Home() {
       await refresh();
     });
   }
+  async function decideApiRecord(
+    kind: "api-contracts" | "environment-adapters" | "network-authorities",
+    id: string,
+    verb: "approve" | "reject",
+  ) {
+    await action(async () => {
+      const noteKey = `${kind}-${id}`;
+      const note = (notes[noteKey] || "").trim();
+      await request(`/${kind}/${id}/${verb}`, note ? { note } : {});
+      setNotes((n) => {
+        const next = { ...n };
+        delete next[noteKey];
+        return next;
+      });
+      setMessage(
+        verb === "approve"
+          ? "Approved. It is now part of the trusted, currently-authorized configuration."
+          : "Rejected. It will not become trusted.",
+      );
+      await refresh();
+    });
+  }
+  async function verifyLoginContract() {
+    await action(async () => {
+      const result = await request<{ status: number; contractMatch: boolean; mismatchReason: string | null }>(
+        "/api-contracts/verify-login",
+        {},
+      );
+      setMessage(
+        result.contractMatch
+          ? `Verified against real staging: HTTP ${result.status} matched the approved contract.`
+          : `Real staging call completed (HTTP ${result.status}) but did not match the approved contract: ${result.mismatchReason}`,
+      );
+      await refresh();
+    });
+  }
   async function download(id: string, kind: string) {
     await action(async () => {
       const res = await fetch(API + "/artifacts/" + id, {
@@ -384,6 +460,11 @@ export default function Home() {
   const pendingKnowledgeItems = state?.knowledgeInbox.items || [];
   const pendingKnowledgeEdges = state?.knowledgeInbox.edges || [];
   const pendingKnowledgeCount = pendingKnowledgeItems.length + pendingKnowledgeEdges.length;
+  const pendingApiContracts = state?.apiContractsInbox || [];
+  const pendingEnvironmentAdapters = state?.environmentAdaptersInbox || [];
+  const pendingNetworkAuthorities = state?.networkAuthoritiesInbox || [];
+  const pendingApiCount =
+    pendingApiContracts.length + pendingEnvironmentAdapters.length + pendingNetworkAuthorities.length;
   return (
     <div className="shell">
       <header className="masthead">
@@ -437,6 +518,11 @@ export default function Home() {
                 <Badge variant="outline">{pendingKnowledgeCount}</Badge>
               )}
             </TabsTrigger>
+            <TabsTrigger value="api">
+              <Webhook />
+              API Contracts
+              {pendingApiCount > 0 && <Badge variant="outline">{pendingApiCount}</Badge>}
+            </TabsTrigger>
             <TabsTrigger value="safety">
               <ShieldCheck />
               Safety & coverage
@@ -465,9 +551,11 @@ export default function Home() {
                           ? "Nothing changes without your say"
                           : tab === "knowledge"
                             ? "Observed is evidence. Approved is truth."
-                            : tab === "safety"
-                              ? "Confidence needs evidence"
-                              : "Connect your test environment"}
+                            : tab === "api"
+                              ? "What an endpoint should do, and where it may be called"
+                              : tab === "safety"
+                                ? "Confidence needs evidence"
+                                : "Connect your test environment"}
               </h1>
               <p>
                 {tab === "workspace"
@@ -482,9 +570,11 @@ export default function Home() {
                           ? "A candidate change to a locator or test never applies itself. Review the evidence, then approve or reject."
                           : tab === "knowledge"
                             ? "Every rule below cites its source. Nothing becomes trusted product truth until you approve it."
-                            : tab === "safety"
-                              ? "A bounded first version, with clear limits and no silent changes to expected behavior."
-                              : "Start with an isolated test application, then verify your Lawcus staging access."}
+                            : tab === "api"
+                              ? "A contract, its environment, and its network authority are approved separately. All three are required before any real call runs."
+                              : tab === "safety"
+                                ? "A bounded first version, with clear limits and no silent changes to expected behavior."
+                                : "Start with an isolated test application, then verify your Lawcus staging access."}
               </p>
             </div>
             <div className="connection">
@@ -1170,6 +1260,170 @@ export default function Home() {
                 ))}
               </div>
             ) : null}
+          </TabsContent>
+          <TabsContent value="api">
+            <div className="panel question-panel">
+              <span className="section-label">API CONTRACT INBOX</span>
+              {!pendingApiContracts.length ? (
+                <div className="empty-small">
+                  <Webhook />
+                  <h2>Nothing waiting for review</h2>
+                  <p>
+                    A proposed API contract describes one endpoint&apos;s method, path,
+                    request/response shape and provenance — never trusted until you approve it.
+                  </p>
+                </div>
+              ) : (
+                pendingApiContracts.map((c) => (
+                  <div className="question" key={c.id}>
+                    <div className="inline">
+                      <Badge variant="outline">{c.method}</Badge>
+                      <Badge variant="outline">{c.provenance}</Badge>
+                      <Badge variant="outline">{c.read_write}</Badge>
+                    </div>
+                    <p>
+                      <strong>{c.operation}</strong>
+                    </p>
+                    <p className="subtle">
+                      {c.feature_name} · {c.path_template}
+                    </p>
+                    <p className="subtle">{c.verification_requirements}</p>
+                    <label className="sr-only" htmlFor={"note-ac-" + c.id}>
+                      Decision note
+                    </label>
+                    <Textarea
+                      id={"note-ac-" + c.id}
+                      value={notes["api-contracts-" + c.id] || ""}
+                      onChange={(e) =>
+                        setNotes({ ...notes, ["api-contracts-" + c.id]: e.target.value })
+                      }
+                      placeholder="Optional note explaining your decision…"
+                      maxLength={1000}
+                    />
+                    <div className="inline">
+                      <Button disabled={busy} onClick={() => decideApiRecord("api-contracts", c.id, "approve")}>
+                        <Check />
+                        Approve
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => decideApiRecord("api-contracts", c.id, "reject")}
+                      >
+                        <X />
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            {state?.apiContractsApproved.length ? (
+              <div className="panel question-panel">
+                <span className="section-label">APPROVED API CONTRACTS</span>
+                {state.apiContractsApproved.map((group) => (
+                  <div key={group.feature}>
+                    <h3>{group.feature}</h3>
+                    {group.items.map((c) => (
+                      <div className="list-row" key={c.id}>
+                        <div>
+                          <h3>{c.operation}</h3>
+                          <p className="subtle">
+                            {c.method} {c.path_template}
+                          </p>
+                        </div>
+                        <Badge variant="outline">v{c.version}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                <Button variant="outline" disabled={busy} onClick={verifyLoginContract}>
+                  <Waypoints />
+                  Verify login contract against real staging
+                </Button>
+                <p className="small-note">
+                  Sends one real request to the authorized staging login endpoint with a
+                  deliberately wrong password — it can never authenticate — and checks the
+                  response against the approved contract.
+                </p>
+              </div>
+            ) : null}
+            <div className="environment-grid">
+              <div className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <span className="section-label">ENVIRONMENT ADAPTER</span>
+                    <h2>Lawcus staging origins</h2>
+                  </div>
+                </div>
+                {pendingEnvironmentAdapters.map((a) => (
+                  <div className="question" key={a.id}>
+                    <p className="subtle">API origin: {a.api_origin}</p>
+                    <p className="subtle">App origin: {a.app_origin}</p>
+                    {a.assets_origin && <p className="subtle">Assets origin: {a.assets_origin}</p>}
+                    <div className="inline">
+                      <Button disabled={busy} onClick={() => decideApiRecord("environment-adapters", a.id, "approve")}>
+                        <Check />
+                        Approve
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => decideApiRecord("environment-adapters", a.id, "reject")}
+                      >
+                        <X />
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {state?.environmentAdaptersApproved.map((a) => (
+                  <div className="list-row" key={a.id}>
+                    <div>
+                      <p className="subtle">{a.api_origin}</p>
+                    </div>
+                    <Badge variant="outline">approved · v{a.version}</Badge>
+                  </div>
+                ))}
+              </div>
+              <div className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <span className="section-label">NETWORK AUTHORITY</span>
+                    <h2>What the Safe API Executor may contact</h2>
+                  </div>
+                </div>
+                {pendingNetworkAuthorities.map((n) => (
+                  <div className="question" key={n.id}>
+                    <p className="subtle">Hosts: {JSON.parse(n.allowed_hosts).join(", ")}</p>
+                    <p className="subtle">Methods: {JSON.parse(n.allowed_methods).join(", ")}</p>
+                    <p className="subtle">Redirects: {n.allow_redirects ? "allowed" : "blocked"}</p>
+                    <div className="inline">
+                      <Button disabled={busy} onClick={() => decideApiRecord("network-authorities", n.id, "approve")}>
+                        <Check />
+                        Approve
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => decideApiRecord("network-authorities", n.id, "reject")}
+                      >
+                        <X />
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {state?.networkAuthoritiesApproved.map((n) => (
+                  <div className="list-row" key={n.id}>
+                    <div>
+                      <p className="subtle">{JSON.parse(n.allowed_hosts).join(", ")}</p>
+                    </div>
+                    <Badge variant="outline">approved · v{n.version}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
           </TabsContent>
           <TabsContent value="safety">
             <div className="safety-grid">
