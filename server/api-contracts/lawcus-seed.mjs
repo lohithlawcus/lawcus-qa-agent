@@ -189,6 +189,100 @@ export const CONTACTS_CONTRACTS = [
   },
 ];
 
+// V5 Step 15 — Leads. Observed for real against lohith.fiveriverz.com on
+// 2026-09-15: a Lead is a Matter-shaped record (status "LEAD") with a
+// client_id linking to its associated Contact. GET /matters/:uuid reads
+// it; the real update path is PUT /leads (note: no :uuid in the path —
+// the target is identified by matter_uuid in the body), whose request
+// carries both contact_* fields (for the linked "Potential Client") and
+// matter_* fields (for the Lead/Matter itself), each with their own
+// matter_custom_fields / contact_custom_fields array in the same
+// {team_custom_field_id, value} write shape already observed for plain
+// Contacts. The response wraps the updated record as {matter: {...}}.
+// Schemas here assert only the fields this project actually inspected
+// (id/uuid/status/custom_fields on read; matter_uuid/matter_custom_fields
+// on write) — every other real field seen on the wire (billing,
+// practice area, assignees, ...) is deliberately left unconstrained.
+export const LEADS_CONTRACTS = [
+  {
+    semanticId: "lawcus.leads.read",
+    featureName: "Leads",
+    featureDescription: "Leads are Matter-shaped records with status LEAD and a linked Contact (client_id) — section 8's contacts.three-views.",
+    operation: "Read one lead by UUID",
+    method: "GET",
+    pathTemplate: "/matters/:uuid",
+    responseSchema: {
+      "200": {
+        type: "object",
+        required: ["id", "uuid", "name", "status", "custom_fields"],
+        properties: {
+          id: { type: "number" },
+          uuid: { type: "string" },
+          name: { type: "string" },
+          status: { type: "string" },
+          client_id: { type: "number" },
+          custom_fields: { type: "array", items: CUSTOM_FIELD_VALUE_SCHEMA },
+        },
+      },
+    },
+    expectedStatuses: [200],
+    readWrite: "read",
+    verificationRequirements: "custom_fields is read fresh before every update — never assumed from a prior response. status must be checked to be \"LEAD\" before treating the record as a lead rather than a converted matter.",
+    provenance: "OBSERVED_API",
+    docSource: null,
+    docVersion: null,
+    docDate: null,
+  },
+  {
+    semanticId: "lawcus.leads.update",
+    featureName: "Leads",
+    featureDescription: "Leads are Matter-shaped records with status LEAD and a linked Contact (client_id) — section 8's contacts.three-views.",
+    operation: "Update a lead's matter-level fields, including its custom field values",
+    method: "PUT",
+    pathTemplate: "/leads",
+    requestSchema: {
+      type: "object",
+      required: ["matter_uuid", "matter_custom_fields"],
+      properties: {
+        matter_uuid: { type: "string" },
+        matter_custom_fields: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["team_custom_field_id", "value"],
+            properties: { team_custom_field_id: { type: "number" }, value: { type: "string" } },
+          },
+        },
+      },
+    },
+    responseSchema: {
+      "200": {
+        type: "object",
+        required: ["matter"],
+        properties: {
+          matter: {
+            type: "object",
+            required: ["id", "uuid", "custom_fields"],
+            properties: {
+              id: { type: "number" },
+              uuid: { type: "string" },
+              custom_fields: { type: "array", items: CUSTOM_FIELD_VALUE_SCHEMA },
+            },
+          },
+        },
+      },
+    },
+    expectedStatuses: [200],
+    readWrite: "write",
+    verificationRequirements:
+      "The response's matter.custom_fields must be re-checked for the exact value just sent (section 24: independent confirmation, not just a 200 status) before the mutation is trusted.",
+    provenance: "OBSERVED_API",
+    docSource: null,
+    docVersion: null,
+    docDate: null,
+  },
+];
+
 export function seedLawcusApiContracts(apiContracts) {
-  for (const contract of [...AUTHENTICATION_CONTRACTS, ...CONTACTS_CONTRACTS]) apiContracts.proposeContract(contract);
+  for (const contract of [...AUTHENTICATION_CONTRACTS, ...CONTACTS_CONTRACTS, ...LEADS_CONTRACTS]) apiContracts.proposeContract(contract);
 }

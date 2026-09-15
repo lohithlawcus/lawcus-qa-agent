@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
 import {publicIPv4,startEgress} from '../core/egress.mjs';
-import {permitLiveRequest,permitContactsRequest,STAGING,API_ORIGIN,ASSETS} from '../core/live-runner.mjs';
+import {permitLiveRequest,permitContactsRequest,permitLeadsRequest,STAGING,API_ORIGIN,ASSETS} from '../core/live-runner.mjs';
 import {sealEvidence,openEvidence,CredentialSetup} from '../core/setup.mjs';
 import {createOpenAIProvider} from '../ai/providers/openai.mjs';
 
@@ -31,6 +31,20 @@ test('Contacts policy is permitLiveRequest plus exactly one write shape — PUT 
   [API_ORIGIN+'/matters/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
   ['https://user:password@'+API_ORIGIN.replace('https://','')+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
  ])assert.equal(permitContactsRequest(url,method,'fetch'),false,`${method} ${url}`);
+});
+test('Leads policy is permitLiveRequest plus exactly one write shape — PUT /leads (no :uuid segment) — nothing broader',()=>{
+ assert.equal(permitLeadsRequest(API_ORIGIN+'/login','POST','fetch'),true);
+ assert.equal(permitLeadsRequest(ASSETS+'/app.js','GET','script'),true);
+ assert.equal(permitLeadsRequest(API_ORIGIN+'/leads','PUT','fetch'),true);
+ for(const [url,method] of [
+  [API_ORIGIN+'/leads','DELETE'],
+  [API_ORIGIN+'/leads','POST'],
+  [API_ORIGIN+'/leads/c59e9ec0-b115-11f1-b4fe-1feb32eda16d','PUT'],
+  [API_ORIGIN+'/v2/leads','PUT'],
+  [API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
+  [API_ORIGIN+'/matters/c59e9ec0-b115-11f1-b4fe-1feb32eda16d','PUT'],
+  ['https://user:password@'+API_ORIGIN.replace('https://','')+'/leads','PUT'],
+ ])assert.equal(permitLeadsRequest(url,method,'fetch'),false,`${method} ${url}`);
 });
 test('DNS rebinding to private or mixed address sets fails before the proxy opens',async()=>{
  for(const addresses of [['127.0.0.1'],['169.254.169.254'],['93.184.216.34','10.0.0.1'],[]])

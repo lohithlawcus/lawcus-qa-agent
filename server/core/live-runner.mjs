@@ -16,6 +16,7 @@ export {STAGING,API_ORIGIN,ASSETS};
 import {attachNetworkObserver,correlateObservation} from './network-observer.mjs';
 import {attachRecorder} from './recorder.mjs';
 import {updateAndRestoreContactCustomFieldViaBrowser,VIEWPORT as CONTACTS_VIEWPORT} from './contacts-browser.mjs';
+import {updateAndRestoreLeadCustomFieldViaBrowser,VIEWPORT as LEADS_VIEWPORT} from './leads-browser.mjs';
 import {ApiContractError} from './api-contracts.mjs';
 // V5 Step 11 / section 23 — which real API request each login scenario is
 // expected to trigger. 'logout' is intentionally absent: no logout API
@@ -54,6 +55,16 @@ export function permitContactsRequest(url,method,resourceType){
  let u;try{u=new URL(url);}catch{return false;}
  if(u.protocol!=='https:'||u.username||u.password||u.port||u.origin!==API_ORIGIN)return false;
  return method==='PUT'&&/^\/contacts\/[a-f0-9-]{36}$/.test(u.pathname);
+}
+// V5 Step 15 — same shape as permitContactsRequest, but for Leads: the
+// real lawcus.leads.update call is PUT /leads with no :uuid in the path
+// (the target lead is identified by matter_uuid in the body instead), so
+// the exact-path check here is narrower than a regex with a UUID segment.
+export function permitLeadsRequest(url,method,resourceType){
+ if(permitLiveRequest(url,method,resourceType))return true;
+ let u;try{u=new URL(url);}catch{return false;}
+ if(u.protocol!=='https:'||u.username||u.password||u.port||u.origin!==API_ORIGIN)return false;
+ return method==='PUT'&&u.pathname==='/leads';
 }
 async function launch(proxy,headless=true){return chromium.launch({headless,chromiumSandbox:true,...(proxy?{proxy:{server:proxy.server,bypass:'<-loopback>'}}:{}),args:['--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-quic']});}
 export async function checkBrowser(){let browser;try{browser=await launch();const p=await browser.newPage();await p.goto('about:blank');return {ready:true,message:'Chromium can launch in the local runner.'};}catch{return {ready:false,message:'Chromium could not launch. Open the app using its launcher and keep that window open.'};}finally{await browser?.close().catch(()=>{});}}
@@ -428,6 +439,36 @@ export async function runContactCustomFieldCheck({apiContracts,mutationJournal,r
   await assertIdentity(page,creds.username);
   await page.close();
   return await updateAndRestoreContactCustomFieldViaBrowser({context,apiContracts,mutationJournal,environmentId:'lawcus',runId,uuid,fieldName,newValue,primitiveId});
+ }finally{
+  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
+ }
+}
+
+// V5 Step 15 — Leads, browser-driven, mirroring runContactCustomFieldCheck
+// exactly (same login helpers, same permit*/close discipline), aimed at
+// leads-browser.mjs's Step 2 (matter-level) custom field cycle instead.
+// Uses permitLeadsRequest — NOT permitLiveRequest or permitContactsRequest
+// — so neither existing policy is silently widened by this.
+export async function runLeadCustomFieldCheck({apiContracts,mutationJournal,runId,uuid,fieldName,newValue,primitiveId='leads.update_custom_field_via_browser'}){
+ let browser,proxy,context;
+ try{
+  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
+  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
+  browser=await launch(proxy);
+  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:LEADS_VIEWPORT});
+  context.setDefaultTimeout(20000);context.setDefaultNavigationTimeout(25000);
+  await context.routeWebSocket(/.*/,socket=>socket.close());
+  await context.route('**/*',async route=>{
+   if(!permitLeadsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   await route.continue();
+  });
+  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
+  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
+  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
+  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
+  await assertIdentity(page,creds.username);
+  await page.close();
+  return await updateAndRestoreLeadCustomFieldViaBrowser({context,apiContracts,mutationJournal,environmentId:'lawcus',runId,uuid,fieldName,newValue,primitiveId});
  }finally{
   await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
  }

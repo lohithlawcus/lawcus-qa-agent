@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "../core/store.mjs";
 import { openApiContracts, ApiContractError } from "../core/api-contracts.mjs";
-import { seedLawcusApiContracts, AUTHENTICATION_CONTRACTS, CONTACTS_CONTRACTS } from "../api-contracts/lawcus-seed.mjs";
+import { seedLawcusApiContracts, AUTHENTICATION_CONTRACTS, CONTACTS_CONTRACTS, LEADS_CONTRACTS } from "../api-contracts/lawcus-seed.mjs";
 
 function withStore(fn) {
   const dir = mkdtempSync(join(tmpdir(), "qa-api-contracts-"));
@@ -121,7 +121,7 @@ test("recordCall stores sanitized evidence and never touches the trusted contrac
 
 test("the real Lawcus API seed proposes every contract as OBSERVED_API, unapproved, idempotently", () => {
   withStore((contracts) => {
-    const expectedCount = AUTHENTICATION_CONTRACTS.length + CONTACTS_CONTRACTS.length;
+    const expectedCount = AUTHENTICATION_CONTRACTS.length + CONTACTS_CONTRACTS.length + LEADS_CONTRACTS.length;
     seedLawcusApiContracts(contracts);
     const pending = contracts.inbox();
     assert.equal(pending.length, expectedCount);
