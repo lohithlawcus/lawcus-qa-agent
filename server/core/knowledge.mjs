@@ -364,6 +364,26 @@ export function openKnowledge(db, audit) {
     return [...byFeature.entries()].map(([feature, items]) => ({ feature, items }));
   }
 
+  /** Approved Knowledge only (section 41's search_lawcus_knowledge / MCP
+   * safety boundary: never surfaces a pending_review or rejected item as
+   * if it were trusted), matched by a case-insensitive substring against
+   * semantic_id, title, or statement. Pure text search — no ranking, no
+   * fuzzy matching, nothing invented beyond what the operator already
+   * approved. */
+  function searchApproved(query) {
+    const needle = `%${query.toLowerCase()}%`;
+    return db
+      .prepare(
+        `SELECT knowledge_items.*, features.name AS feature_name
+         FROM knowledge_items JOIN features ON features.id = knowledge_items.feature_id
+         WHERE knowledge_items.status='approved'
+           AND (lower(knowledge_items.semantic_id) LIKE ? OR lower(knowledge_items.title) LIKE ? OR lower(knowledge_items.statement) LIKE ?)
+         ORDER BY features.name, knowledge_items.title`,
+      )
+      .all(needle, needle, needle)
+      .map(withLinks);
+  }
+
   return {
     ensureFeature,
     proposeItem,
@@ -371,6 +391,7 @@ export function openKnowledge(db, audit) {
     rejectItem,
     proposeEdge,
     approveEdge,
+    searchApproved,
     rejectEdge,
     approvedGraph,
     inboxItems,

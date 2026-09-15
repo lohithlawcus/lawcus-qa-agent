@@ -192,6 +192,41 @@ export function openTestBook(db, audit) {
       };
     },
 
+    /** One case by external_id, with its current version's source text
+     * included — section 41's read_test_case: reads a real, already-synced
+     * case's exact current definition, never invents or infers one. Returns
+     * null if the case isn't in the TestBook. */
+    findCase(externalId) {
+      const testCase = db
+        .prepare(
+          `SELECT test_cases.*, test_suites.name AS suite_name, features.name AS feature_name
+           FROM test_cases
+           JOIN test_suites ON test_suites.id = test_cases.suite_id
+           JOIN features ON features.id = test_suites.feature_id
+           WHERE test_cases.external_id=?`,
+        )
+        .get(externalId);
+      if (!testCase) return null;
+      const version = db
+        .prepare("SELECT * FROM test_definition_versions WHERE test_case_id=? AND version=?")
+        .get(testCase.id, testCase.current_version);
+      return {
+        id: testCase.id,
+        externalId: testCase.external_id,
+        title: testCase.title,
+        description: testCase.description,
+        layer: testCase.layer,
+        priority: testCase.priority,
+        risk: testCase.risk,
+        status: testCase.status,
+        currentVersion: testCase.current_version,
+        featureName: testCase.feature_name,
+        suiteName: testCase.suite_name,
+        source: version?.dsl_source ?? null,
+        stats: caseStats(testCase.id),
+      };
+    },
+
     /** Links pre-existing scenario_results rows (written before the
      * TestBook existed) to a case by exact scenario-name match, without
      * touching any other column. Never assigns a version to a historical

@@ -1,5 +1,5 @@
-import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession,runContactCustomFieldCheck,runLeadCustomFieldCheck,runContactCreationCheck,runLeadCreationCheck} from './core/live-runner.mjs';
-import { seedLawcusNativeCases } from './testbook/lawcus-native-cases.mjs';
+import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession} from './core/live-runner.mjs';
+import { seedLawcusNativeCases, buildNativeRunners } from './testbook/lawcus-native-cases.mjs';
 import { planImpactedTest, proposeGapCoverage, executeImpactedTest } from './core/impacted-testing.mjs';
 import { openPersonas, PersonaRegistration } from './core/personas.mjs';
 import { openAuthoringSessions, AuthoringSessionRequest, AuthoringDiscardRequest } from './core/authoring-sessions.mjs';
@@ -890,31 +890,7 @@ const server = createServer(
         db.prepare("INSERT INTO runs(id,runbook_id,status,replay,started_at) VALUES(?,?,?,?,?)").run(runId, runbookId, "running", 0, now());
         audit("impacted_test.started", runId, { intent: input.intent, cells: plan.cells.length, gaps: plan.gaps.length });
 
-        // Real, owned staging fixtures from Step 15's own live-verified work
-        // (see the project memory note on those commits) — not invented
-        // here, and never used for any prompt this router doesn't
-        // explicitly recognize.
-        const KNOWN_CONTACT_UUID = "e2bf71a0-ae87-11f1-ab8e-f18331cbd381"; // "QA Batch Test"
-        const KNOWN_LEAD_UUID = "c59e9ec0-b115-11f1-b4fe-1feb32eda16d"; // "QA Agent - 1789484203935"
-        const ts = Date.now();
-        const runners = {
-          "contacts.custom_field_update_existing": async () => {
-            const r = await runContactCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_CONTACT_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
-            return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
-          },
-          "contacts.create_new_verifies_custom_fields": async () => {
-            const r = await runContactCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts) });
-            return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
-          },
-          "leads.custom_field_update_existing": async () => {
-            const r = await runLeadCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_LEAD_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
-            return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
-          },
-          "leads.create_new_verifies_custom_fields": async () => {
-            const r = await runLeadCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts + 1), matterName: `QA Agent - ${ts + 1}` });
-            return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
-          },
-        };
+        const runners = buildNativeRunners({ apiContracts, mutationJournal, runId });
 
         let results = [];
         let filedProposals = [];

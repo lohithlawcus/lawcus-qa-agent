@@ -187,6 +187,20 @@ export function openStore(directory) {
     if (inconsistentProposals.length)
       throw new Error(`Migration 16 left inconsistent foreign keys: ${JSON.stringify(inconsistentProposals)}`);
   }
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=17").get()) {
+    // Same rebuild pattern as migration 16, widening generated_by again.
+    db.exec("PRAGMA foreign_keys=OFF");
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(readFileSync(new URL("../migrations/017_mcp_origin.sql", import.meta.url), "utf8"));
+      db.prepare("INSERT INTO schema_migrations VALUES(17,?)").run(now());
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    db.exec("PRAGMA foreign_keys=ON");
+    const inconsistentProposals17 = db.prepare("PRAGMA foreign_key_check").all();
+    if (inconsistentProposals17.length)
+      throw new Error(`Migration 17 left inconsistent foreign keys: ${JSON.stringify(inconsistentProposals17)}`);
+  }
   const stale = db.prepare("SELECT id FROM runs WHERE status='running'").all();
   db.prepare(
     "UPDATE runs SET status='interrupted',finished_at=?,summary='The runner stopped before this run completed. Review the partial results before running again.' WHERE status='running'",

@@ -28,6 +28,7 @@ const NON_HUMAN_ORIGINS = new Set([
   "recorder",
   "network_observer",
   "impacted_testing",
+  "mcp_tool",
 ]);
 
 const DEFAULT_TTL_HOURS = 72;
