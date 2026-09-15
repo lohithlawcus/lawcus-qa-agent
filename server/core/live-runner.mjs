@@ -12,6 +12,19 @@ import {now} from './store.mjs';
 // that already imports them from live-runner.mjs has to change.
 import {STAGING,API_ORIGIN,ASSETS} from './environment-adapter.mjs';
 export {STAGING,API_ORIGIN,ASSETS};
+import {attachNetworkObserver,correlateObservation} from './network-observer.mjs';
+import {ApiContractError} from './api-contracts.mjs';
+// V5 Step 11 / section 23 — which real API request each login scenario is
+// expected to trigger. 'logout' is intentionally absent: no logout API
+// contract exists yet (the response was never actually inspected anywhere
+// in this codebase, so declaring one here would be inventing an
+// expectation this project hasn't earned — see server/api-contracts/lawcus-seed.mjs).
+const NETWORK_EXPECTATIONS={
+ valid_login:{semanticId:'lawcus.auth.login',cardinality:'exactly_one'},
+ invalid_password:{semanticId:'lawcus.auth.login',cardinality:'exactly_one'},
+ password_masked:{semanticId:'lawcus.auth.login',cardinality:'zero'},
+ empty_fields:{semanticId:'lawcus.auth.login',cardinality:'zero'},
+};
 export const liveDescriptions={
  valid_login:{title:'Sign in to the authorized staging workspace',expected:'The staging workspace opens and its profile menu identifies the dedicated QA account.'},
  password_masked:{title:'Keep the password concealed',expected:'The staging login password input masks typed characters.'},
@@ -53,7 +66,7 @@ async function assertIdentity(page,username){
  await page.getByRole('menuitem').filter({hasText:username}).waitFor({state:'visible'});
  return profile;
 }
-export async function runLive({db,audit,runId,artifactDirectory,negativeAllowed=false}){
+export async function runLive({db,audit,runId,artifactDirectory,apiContracts,networkObservations,negativeAllowed=false}){
  const run=db.prepare('SELECT * FROM runs WHERE id=?').get(runId);const book=db.prepare('SELECT * FROM runbooks WHERE id=?').get(run.runbook_id);const plan=Plan.parse(JSON.parse(book.definition));
  if(book.environment_id!=='lawcus')throw new Error('Incorrect environment for the staging runner.');
  if(plan.scenarios.includes('invalid_password')&&!negativeAllowed)throw new Error('Incorrect-password testing is not enabled.');
@@ -63,11 +76,12 @@ export async function runLive({db,audit,runId,artifactDirectory,negativeAllowed=
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
   mkdirSync(artifactDirectory,{recursive:true,mode:0o700});
   for(const scenario of plan.scenarios){
-   const id=randomUUID();const started=Date.now();const events=[];const blocked=new Set();let context;let page;let actual=liveDescriptions[scenario].expected;let status='passed';let healed=false;let candidate;let loginRequests=0;let loginStatus;let logoutRequested=false;let logoutRequests=0;let failureCategory='behavior-or-automation';
+   const id=randomUUID();const started=Date.now();const events=[];const blocked=new Set();let context;let page;let observer;let actual=liveDescriptions[scenario].expected;let status='passed';let healed=false;let candidate;let loginRequests=0;let loginStatus;let logoutRequested=false;let logoutRequests=0;let failureCategory='behavior-or-automation';
    const event=(action,result)=>events.push({at:now(),action,result});
    try{
     browser=await launch(proxy);
     context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:{width:1280,height:900}});context.setDefaultTimeout(12000);context.setDefaultNavigationTimeout(25000);
+    observer=attachNetworkObserver(context);
     await context.routeWebSocket(/.*/,socket=>socket.close());
     await context.route('**/*',async route=>{const request=route.request();const url=new URL(request.url());
      if(!permitLiveRequest(request.url(),request.method(),request.resourceType())){blocked.add([STAGING,API_ORIGIN,ASSETS].includes(url.origin)?'disallowed-method-or-resource':'unapproved-destination');await route.abort('blockedbyclient');return;}
@@ -134,6 +148,28 @@ export async function runLive({db,audit,runId,artifactDirectory,negativeAllowed=
     const questionId=randomUUID();db.prepare('INSERT INTO clarifications(id,run_id,question,created_at) VALUES(?,?,?,?)').run(questionId,runId,failureCategory==='authentication-rejected'?'Staging rejected the saved dedicated account. Please verify and update it in Environment; do not enter passwords here.':failureCategory==='earlier-authentication-failure'?'An earlier authentication failure prevented this check. Resolve that failure before another run.':failureCategory==='page-load-timeout'?'The staging page did not load in time. Check availability before another run.':`During “${liveDescriptions[scenario].title}”, I could not confirm the expected behavior. ${liveDescriptions[scenario].expected} Review the evidence before deciding whether application behavior or automation needs correction.`,now());
     audit('clarification.opened',questionId,{runId,scenario});
    }
+   observer?.dispose();
+   // Correlation is computed here (it can still affect status/actual before
+   // scenario_results is written), but network_observations itself is only
+   // written further below, AFTER that row exists — it carries a foreign
+   // key to scenario_results(id), which this scenario's row doesn't have
+   // until the INSERT a few lines down.
+   const expectation=NETWORK_EXPECTATIONS[scenario];
+   let pendingObservation=null;
+   if(expectation&&observer){
+    try{
+     const contract=apiContracts.resolveApprovedContract(expectation.semanticId);
+     const result=correlateObservation({contract,events:observer.events,host:new URL(API_ORIGIN).hostname,cardinality:expectation.cardinality});
+     pendingObservation={contractId:contract.id,semanticId:expectation.semanticId,expectedCardinality:expectation.cardinality,result};
+     if(status==='passed'&&!result.contractMatch){failed++;status='failed';actual=`The UI behaved as expected, but the network check failed: ${result.mismatchReason}`;event('Network contract check',result.mismatchReason);}
+     else event('Network contract check',result.contractMatch?'matched':'not verified (UI already failed)');
+    }catch(error){
+     // No approved contract yet for this semantic id — section 23's
+     // "blocked_unverified": network verification is unavailable, not a
+     // reason to fail a scenario whose UI behavior already passed.
+     if(!(error instanceof ApiContractError))throw error;
+    }
+   }
    const artifacts=[];
    try{
     if(page){const image=await page.screenshot({mask:[page.locator('input'),page.locator('textarea')],fullPage:false});const name=`${randomUUID()}.png.enc`;writeFileSync(join(artifactDirectory,name),await sealEvidence(image),{mode:0o600});artifacts.push(['screenshot',name]);image.fill(0);}
@@ -142,8 +178,17 @@ export async function runLive({db,audit,runId,artifactDirectory,negativeAllowed=
     if(!page)throw new Error('No screenshot captured.');
    }catch{if(status==='passed'){failed++;status='failed';actual='The check could not save its required encrypted evidence. It is not counted as passed.';}}
    finally{await context?.close().catch(()=>{});await browser?.close().catch(()=>{});browser=null;}
-   db.prepare('INSERT INTO scenario_results VALUES(?,?,?,?,?,?,?,?,?)').run(id,runId,scenario,liveDescriptions[scenario].title,status,liveDescriptions[scenario].expected,actual,Date.now()-started,healed?1:0);
+   // Pre-existing bug fixed here (V5 Step 11): migration 005 added
+   // test_case_id/test_definition_version_id to scenario_results, but this
+   // legacy live-staging path (predates the DSL/TestBook system) was never
+   // updated — its 9-value positional INSERT against an 11-column table
+   // has thrown on every real 'lawcus' run since. Named columns, leaving
+   // the two TestBook-linkage columns NULL (nullable by design — this path
+   // doesn't run DSL-defined cases the way runner.mjs's executeRun() does).
+   db.prepare('INSERT INTO scenario_results(id,run_id,scenario,title,status,expected,actual,duration_ms,healed) VALUES(?,?,?,?,?,?,?,?,?)').run(id,runId,scenario,liveDescriptions[scenario].title,status,liveDescriptions[scenario].expected,actual,Date.now()-started,healed?1:0);
    for(const [kind,name] of artifacts)db.prepare('INSERT INTO artifacts VALUES(?,?,?,?,?,?)').run(randomUUID(),runId,id,kind,name,now());
+   if(pendingObservation)networkObservations.record({runId,scenarioResultId:id,stepLabel:scenario,...pendingObservation});
+   if(observer?.consoleEntries.length)networkObservations.recordConsoleEntries({runId,scenarioResultId:id,entries:observer.consoleEntries});
   }
   if(!failed&&path&&(!old||JSON.stringify(path)!==JSON.stringify(old))){const id=randomUUID();const version=(db.prepare('SELECT MAX(version) v FROM execution_paths WHERE runbook_id=?').get(book.id).v||0)+1;db.prepare('INSERT INTO execution_paths VALUES(?,?,?,?,?)').run(id,book.id,version,JSON.stringify(path),now());audit('path.saved',id,{version,environment:'lawcus'});}
   db.prepare('UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?').run(failed?'failed':'passed',now(),`${plan.scenarios.length} staging checks completed. ${plan.scenarios.length-failed} passed; ${failed} need review. ${run.replay?'Saved semantic path replayed.':'First staging execution.'} Zero model calls during browser execution. Evidence is encrypted locally.`,runId);

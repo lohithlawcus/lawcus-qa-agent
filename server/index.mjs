@@ -32,6 +32,7 @@ import { seedLawcusApiContracts } from "./api-contracts/lawcus-seed.mjs";
 import { openEnvironmentAdapter, API_ORIGIN, STAGING, ASSETS } from "./core/environment-adapter.mjs";
 import { openNetworkAuthority } from "./core/network-authority.mjs";
 import { createSafeApiClient } from "./core/api-client.mjs";
+import { openNetworkObservations } from "./core/network-observations.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -98,6 +99,10 @@ networkAuthority.proposeAuthority({
   allowRedirects: false,
 });
 const apiClient = createSafeApiClient({ environmentAdapter, networkAuthority, apiContracts });
+// V5 Step 11 — persistence for the Browser Network Contract Observer
+// (server/core/network-observer.mjs), wired into the live staging runner
+// below so its results can be attributed to an exact run/scenario.
+const networkObservations = openNetworkObservations(db, audit);
 // section 14: only an interactive operator identity may approve or reject —
 // never the runner, AI planner, recorder or network observer. This service
 // is single-operator (one Mac, one local session), so the OS account name
@@ -145,6 +150,7 @@ function runDetail(id) {
     )
     .get(id);
   if (!run) return null;
+  const observed = networkObservations.forRun(id);
   return {
     ...run,
     results: db
@@ -168,6 +174,8 @@ function runDetail(id) {
       return row ? JSON.parse(row.manifest) : null;
     })(),
     cancellable: activeRuns.has(id),
+    networkObservations: observed.network,
+    consoleObservations: observed.console,
   };
 }
 const server = createServer(
@@ -513,6 +521,8 @@ const server = createServer(
           runId: id,
           origin: fixture.origin,
           artifactDirectory,
+          apiContracts,
+          networkObservations,
           ...(controller ? { signal: controller.signal } : {}),
         })
           .finally(() => activeRuns.delete(id))

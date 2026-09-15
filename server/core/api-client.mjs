@@ -1,6 +1,7 @@
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { startEgress } from "./egress.mjs";
 import { validateShape, validateResponseAgainstContract } from "./schema-shape.mjs";
+import { summarizeBody } from "./sanitize.mjs";
 
 // V5 Step 10 / section 22 — Safe API Executor. The only way anything in
 // this codebase may make a real, direct (non-browser) HTTP call to a
@@ -28,18 +29,6 @@ function fillPath(template, pathParams) {
       throw new ApiClientError("missing_path_param", `Path parameter "${key}" was not provided.`);
     return encodeURIComponent(String(pathParams[key]));
   });
-}
-
-// Records only shape/metadata, never a value — section 22: "Do not log raw
-// authorization values." Applies to both the outgoing request and the
-// response we received, regardless of which field the sensitive value was
-// under.
-function summarizeBody(value) {
-  if (value === null || value === undefined) return { present: false };
-  if (Array.isArray(value)) return { present: true, kind: "array", length: value.length };
-  if (typeof value === "object") return { present: true, kind: "object", keys: Object.keys(value).sort() };
-  if (typeof value === "string") return { present: true, kind: "string", length: value.length };
-  return { present: true, kind: typeof value };
 }
 
 export function createSafeApiClient({ environmentAdapter, networkAuthority, apiContracts }) {

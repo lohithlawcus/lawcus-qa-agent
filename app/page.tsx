@@ -201,6 +201,22 @@ type Manifest = {
   primitives: { id: string; version: number }[];
   createdAt: string;
 };
+type NetworkObservation = {
+  id: string;
+  scenario_result_id: string | null;
+  semantic_id: string;
+  expected_cardinality: string;
+  observed_count: number;
+  cardinality_ok: number;
+  contract_match: number;
+  mismatch_reason: string | null;
+};
+type ConsoleObservation = {
+  id: string;
+  scenario_result_id: string | null;
+  level: string;
+  message: string;
+};
 type Detail = Run & {
   results: {
     id: string;
@@ -215,6 +231,8 @@ type Detail = Run & {
   clarifications: Question[];
   manifest: Manifest | null;
   cancellable: boolean;
+  networkObservations: NetworkObservation[];
+  consoleObservations: ConsoleObservation[];
 };
 type Plan = {
   id: string;
@@ -752,10 +770,37 @@ export default function Home() {
                                 ))}
                               <span>{(r.duration_ms / 1000).toFixed(1)}s</span>
                             </div>
+                            {detail.networkObservations
+                              .filter((n) => n.scenario_result_id === r.id)
+                              .map((n) => (
+                                <div className="inline" key={n.id}>
+                                  <Webhook size={13} />
+                                  <Badge variant="outline">
+                                    {n.contract_match ? "Network contract verified" : "Network contract mismatch"}
+                                  </Badge>
+                                  {!n.contract_match && n.mismatch_reason && (
+                                    <span className="subtle">{n.mismatch_reason}</span>
+                                  )}
+                                </div>
+                              ))}
                           </div>
                         </div>
                       ))}
                     </div>
+                    {detail.consoleObservations.length > 0 && (
+                      <div className="small-note">
+                        {detail.consoleObservations.length} browser console/page error(s) captured
+                        {" — "}
+                        {Object.entries(
+                          detail.consoleObservations.reduce<Record<string, number>>((counts, c) => {
+                            counts[c.message] = (counts[c.message] || 0) + 1;
+                            return counts;
+                          }, {}),
+                        )
+                          .map(([message, count]) => (count > 1 ? `${message} (×${count})` : message))
+                          .join(" · ")}
+                      </div>
+                    )}
                     {detail.manifest && (
                       <div className="small-note">
                         Exact versions used: {detail.manifest.testCases
