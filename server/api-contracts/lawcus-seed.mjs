@@ -57,6 +57,138 @@ export const AUTHENTICATION_CONTRACTS = [
   },
 ];
 
+// V5 Step 15 — Contacts + Custom Fields. Observed for real against
+// lohith.fiveriverz.com on 2026-09-16 (see server/core/contacts.mjs and
+// the project memory note on that verification): a real Contact's
+// custom_fields array, a real GET /contacts/:uuid read, and a real
+// PUT /contacts/:uuid update that set one field's value and was
+// confirmed round-tripped back in the response. Still OBSERVED_API, not
+// DOCUMENTED — no official Lawcus API documentation exists for this
+// endpoint either. Schemas only assert what was actually inspected:
+// custom_fields' shape, id/uuid/name presence. Every other real field on
+// the contact object (emails, phones, addresses, rates, ...) was seen but
+// is deliberately left unconstrained rather than guessed at.
+const CUSTOM_FIELD_VALUE_SCHEMA = {
+  type: "object",
+  required: ["teamCustomFieldId", "name", "value", "type"],
+  properties: {
+    teamCustomFieldId: { type: "number" },
+    name: { type: "string" },
+    value: { type: "string" },
+    type: { type: "string" },
+  },
+};
+
+export const CONTACTS_CONTRACTS = [
+  {
+    semanticId: "lawcus.contacts.read",
+    featureName: "Contacts",
+    featureDescription: "Person and Company contact records, shared with Leads (section 8's contacts.three-views).",
+    operation: "Read one contact by UUID",
+    method: "GET",
+    pathTemplate: "/contacts/:uuid",
+    responseSchema: {
+      "200": {
+        type: "object",
+        required: ["id", "uuid", "name", "custom_fields"],
+        properties: {
+          id: { type: "number" },
+          uuid: { type: "string" },
+          name: { type: "string" },
+          custom_fields: { type: "array", items: CUSTOM_FIELD_VALUE_SCHEMA },
+        },
+      },
+    },
+    expectedStatuses: [200],
+    readWrite: "read",
+    verificationRequirements: "custom_fields is read fresh before every update — never assumed from a prior response.",
+    provenance: "OBSERVED_API",
+    docSource: null,
+    docVersion: null,
+    docDate: null,
+  },
+  {
+    semanticId: "lawcus.contacts.update",
+    featureName: "Contacts",
+    featureDescription: "Person and Company contact records, shared with Leads (section 8's contacts.three-views).",
+    operation: "Update a contact, including its custom field values",
+    method: "PUT",
+    pathTemplate: "/contacts/:uuid",
+    requestSchema: {
+      type: "object",
+      required: ["id", "custom_fields"],
+      properties: {
+        id: { type: "number" },
+        custom_fields: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["team_custom_field_id", "value"],
+            properties: { team_custom_field_id: { type: "number" }, value: { type: "string" } },
+          },
+        },
+      },
+    },
+    responseSchema: {
+      "200": {
+        type: "object",
+        required: ["id", "uuid", "custom_fields"],
+        properties: {
+          id: { type: "number" },
+          uuid: { type: "string" },
+          custom_fields: { type: "array", items: CUSTOM_FIELD_VALUE_SCHEMA },
+        },
+      },
+    },
+    expectedStatuses: [200],
+    readWrite: "write",
+    verificationRequirements:
+      "The response's custom_fields must be re-checked for the exact value just sent (section 24: independent confirmation, not just a 200 status) before the mutation is trusted.",
+    provenance: "OBSERVED_API",
+    docSource: null,
+    docVersion: null,
+    docDate: null,
+  },
+  {
+    semanticId: "lawcus.customfields.list",
+    featureName: "Contact Custom Fields",
+    featureDescription: "Custom field definitions, independently scoped per entity_type (CONTACT vs MATTER) — section 8's contact-custom-fields.independent-of-matter-custom-fields.",
+    operation: "List all custom field definitions for the team",
+    method: "GET",
+    pathTemplate: "/v2/customfields",
+    responseSchema: {
+      "200": {
+        type: "object",
+        required: ["list"],
+        properties: {
+          list: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["id", "entity_type", "name", "type", "is_default", "is_required"],
+              properties: {
+                id: { type: "number" },
+                entity_type: { type: "string" },
+                name: { type: "string" },
+                type: { type: "string" },
+                is_default: { type: "boolean" },
+                is_required: { type: "boolean" },
+              },
+            },
+          },
+        },
+      },
+    },
+    expectedStatuses: [200],
+    readWrite: "read",
+    verificationRequirements: "entity_type must be checked before treating a field as applicable to Contacts — the same list also carries MATTER-scoped fields.",
+    provenance: "OBSERVED_API",
+    docSource: null,
+    docVersion: null,
+    docDate: null,
+  },
+];
+
 export function seedLawcusApiContracts(apiContracts) {
-  for (const contract of AUTHENTICATION_CONTRACTS) apiContracts.proposeContract(contract);
+  for (const contract of [...AUTHENTICATION_CONTRACTS, ...CONTACTS_CONTRACTS]) apiContracts.proposeContract(contract);
 }
