@@ -1,5 +1,9 @@
-import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser} from './core/live-runner.mjs';
+import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession} from './core/live-runner.mjs';
 import { openPersonas, PersonaRegistration } from './core/personas.mjs';
+import { openAuthoringSessions, AuthoringSessionRequest, AuthoringDiscardRequest } from './core/authoring-sessions.mjs';
+import { normalizeCandidateActions, matchActionsToPrimitives, buildProposalSpecs } from './core/recorder.mjs';
+import { listPrimitives } from './core/primitives.mjs';
+import { summarizeBody } from './core/sanitize.mjs';
 import { createModelRouter, recordModelUsage } from './ai/router.mjs';
 import { createOpenAIProvider } from './ai/providers/openai.mjs';
 import {keychain, readSecret} from './core/secrets.mjs';
@@ -141,6 +145,15 @@ for (const row of db.prepare("SELECT id FROM runs WHERE status='interrupted' AND
 // is a stable, non-spoofable identity for every decision made here.
 const approverIdentity = `operator:${userInfo().username}`;
 const artifactDirectory = join(directory, "artifacts");
+// V5 Step 14 — Recorder / Teaching Mode Foundation (section 29). An open
+// authoring session is a live, stateful browser the operator is actively
+// using — kept here the same way activeRuns tracks in-flight cancellable
+// runs, not persisted as a resumable server-side object (a crashed
+// process loses any session still 'open'; the next startup's stale-run
+// sweep below has no equivalent for authoring sessions yet, matching this
+// step's explicit "Foundation" scope).
+const authoringSessions = openAuthoringSessions(db, audit);
+const activeAuthoringSessions = new Map();
 // V5 Step 6 — in-flight runs' cancellation controllers, keyed by run id.
 // Only fixture/DSL-based runs are cancellable this way (they're the only
 // ones that check a signal); an entry exists only while its run is active.
@@ -350,6 +363,91 @@ const server = createServer(
         const persona=personas.revoke(personaRevoke[1],{revokedBy:approverIdentity,reason:input.note??null});
         json(res,200,persona);return;
       }
+      // V5 Step 14 / section 29 — Teach / Record Workflow.
+      if(req.method==='POST'&&pathname==='/authoring/sessions'){
+        const input=AuthoringSessionRequest.parse(await body(req));
+        const session=authoringSessions.start({
+          operator:approverIdentity,environmentId:input.environmentId,personaId:input.personaId??null,
+          featureName:input.featureName,workflowDescription:input.workflowDescription,
+        });
+        try{
+          const handle=await startAuthoringSession({
+            environmentId:input.environmentId,origin:fixture.origin,personaId:input.personaId??null,
+            personas,personaDirectory:artifactDirectory,
+          });
+          activeAuthoringSessions.set(session.id,handle);
+          json(res,202,session);
+        }catch(error){
+          authoringSessions.fail(session.id,error instanceof Error?error.message:'Could not open the authoring browser.');
+          json(res,400,{error:error instanceof Error&&error.message.length<300?error.message:'Could not open the authoring browser.'});
+        }
+        return;
+      }
+      if(req.method==='GET'&&pathname==='/authoring/sessions'){json(res,200,authoringSessions.list());return;}
+      const authoringSessionGet=/^\/authoring\/sessions\/([a-f0-9-]{36})$/.exec(pathname);
+      if(req.method==='GET'&&authoringSessionGet){
+        const session=authoringSessions.get(authoringSessionGet[1]);
+        if(!session){json(res,404,{error:'Authoring session not found.'});return;}
+        const handle=activeAuthoringSessions.get(session.id);
+        json(res,200,{
+          ...session,
+          live:handle?handle.status():null,
+          actions:authoringSessions.actionsFor(session.id),
+          networkObservations:authoringSessions.networkObservationsFor(session.id),
+        });
+        return;
+      }
+      const authoringComplete=/^\/authoring\/sessions\/([a-f0-9-]{36})\/complete$/.exec(pathname);
+      if(req.method==='POST'&&authoringComplete){
+        const id=authoringComplete[1];
+        const handle=activeAuthoringSessions.get(id);
+        if(!handle){json(res,409,{error:'This authoring session is not currently open.'});return;}
+        const session=authoringSessions.get(id);
+        const {actions:rawActions,networkEvents}=await handle.finish();
+        activeAuthoringSessions.delete(id);
+        const normalized=normalizeCandidateActions(rawActions);
+        for(const action of normalized)
+          authoringSessions.recordAction(id,{
+            sequence:action.sequence,
+            actionType:action.actionType,
+            locatorCandidate:action.locatorCandidate,
+            locatorQuality:action.locatorCandidate.strategy==='css-path'?'unstable':'stable',
+            redacted:action.redacted,
+            valueSummary:action.valueSummary,
+            valueLiteral:action.valueLiteral,
+          });
+        for(const event of networkEvents){
+          let host='',path='';
+          try{const u=new URL(event.url);host=u.hostname;path=u.pathname;}catch{}
+          authoringSessions.recordNetworkObservation(id,{
+            method:event.method,host,path,status:event.status,
+            requestSummary:summarizeBody(event.requestBody),
+            responseSummary:event.responseBody!=null?summarizeBody(event.responseBody):null,
+          });
+        }
+        const matched=matchActionsToPrimitives(normalized,listPrimitives());
+        const testCaseSubjectId=`${session.feature_name.toLowerCase().replace(/[^a-z0-9]+/g,'-')}.${session.workflow_description.toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0,60)}`;
+        const specs=buildProposalSpecs({session,actions:matched,testCaseSubjectId});
+        const proposalIds=[];
+        const proposalErrors=[];
+        for(const spec of specs){
+          try{proposalIds.push(proposals.create({...spec,generatedBy:'recorder'}));}
+          catch(error){proposalErrors.push(error instanceof Error?error.message:'Could not create a proposal.');}
+        }
+        const completed=authoringSessions.complete(id,{proposalIds});
+        json(res,200,{...completed,proposalIds,proposalErrors,actionCount:normalized.length});
+        return;
+      }
+      const authoringDiscard=/^\/authoring\/sessions\/([a-f0-9-]{36})\/discard$/.exec(pathname);
+      if(req.method==='POST'&&authoringDiscard){
+        const id=authoringDiscard[1];
+        const input=AuthoringDiscardRequest.parse(await body(req));
+        const handle=activeAuthoringSessions.get(id);
+        if(handle){await handle.abort();activeAuthoringSessions.delete(id);}
+        const session=authoringSessions.discard(id,input.reason??null);
+        json(res,200,session);
+        return;
+      }
       // V5 Step 10 / Milestone 2 DoD — "one real authorized staging contract
       // verified end-to-end". Purpose-built to exactly one contract, not a
       // generic "call any approved contract with any body" endpoint: this
@@ -413,6 +511,7 @@ const server = createServer(
           networkAuthoritiesInbox: networkAuthority.inbox(),
           networkAuthoritiesApproved: networkAuthority.approved(),
           personas: personas.list(),
+          authoringSessions: authoringSessions.list(),
           audit: db
             .prepare(
               "SELECT * FROM audit_events ORDER BY sequence DESC LIMIT 30",

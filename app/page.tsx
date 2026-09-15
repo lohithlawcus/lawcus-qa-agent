@@ -27,6 +27,7 @@ import {
   Webhook,
   Waypoints,
   Users,
+  Video,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -191,6 +192,7 @@ type State = {
   networkAuthoritiesInbox: NetworkAuthorityRow[];
   networkAuthoritiesApproved: NetworkAuthorityRow[];
   personas: Persona[];
+  authoringSessions: AuthoringSession[];
   audit: { id: string; action: string; created_at: string }[];
   planner: string;
 };
@@ -231,6 +233,19 @@ type Persona = {
   status: string;
   session_status: string;
   created_at: string;
+};
+type AuthoringSession = {
+  id: string;
+  operator: string;
+  environment_id: string;
+  persona_id: string | null;
+  feature_name: string;
+  workflow_description: string;
+  status: string;
+  started_at: string;
+  ended_at: string | null;
+  proposal_ids: string | null;
+  discard_reason: string | null;
 };
 type Detail = Run & {
   results: {
@@ -303,6 +318,9 @@ export default function Home() {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [personaConnection, setPersonaConnection] = useState<{ status: string; message: string } | null>(null);
   const [personaForm, setPersonaForm] = useState({ role: "admin", label: "", credentialAccount: "lawcus-persona-admin" });
+  const [authoringForm, setAuthoringForm] = useState({ environmentId: "fixture", featureName: "", workflowDescription: "" });
+  const [activeAuthoringSession, setActiveAuthoringSession] = useState<AuthoringSession | null>(null);
+  const [authoringLiveCount, setAuthoringLiveCount] = useState(0);
   const refresh = useCallback(async () => {
     setState(await request<State>("/state"));
   }, []);
@@ -515,6 +533,52 @@ export default function Home() {
     }, 1500);
     return () => clearInterval(timer);
   }, [personaConnection, refresh]);
+  async function startAuthoring() {
+    await action(async () => {
+      if (!authoringForm.featureName.trim() || !authoringForm.workflowDescription.trim())
+        throw new Error("Describe the feature and the workflow you'll perform.");
+      const session = await request<AuthoringSession>("/authoring/sessions", authoringForm);
+      setActiveAuthoringSession(session);
+      setAuthoringLiveCount(0);
+      setMessage("A separate Chromium window opened — perform the workflow there, then come back and finish.");
+    });
+  }
+  async function finishAuthoring() {
+    if (!activeAuthoringSession) return;
+    await action(async () => {
+      const result = await request<{ proposalCount: number; actionCount: number; proposalErrors: string[] }>(
+        `/authoring/sessions/${activeAuthoringSession.id}/complete`,
+        {},
+      );
+      setActiveAuthoringSession(null);
+      setMessage(
+        `Recorded ${result.actionCount} action(s) — ${result.proposalCount} proposal(s) created for review in Proposals.` +
+          (result.proposalErrors.length ? ` (${result.proposalErrors.length} could not be created.)` : ""),
+      );
+      await refresh();
+    });
+  }
+  async function discardAuthoring() {
+    if (!activeAuthoringSession) return;
+    await action(async () => {
+      await request(`/authoring/sessions/${activeAuthoringSession.id}/discard`, {});
+      setActiveAuthoringSession(null);
+      setMessage("Recording discarded. No proposals were created.");
+      await refresh();
+    });
+  }
+  useEffect(() => {
+    if (!activeAuthoringSession) return;
+    const timer = setInterval(async () => {
+      try {
+        const detail = await request<{ live: { actionCount: number } | null }>(`/authoring/sessions/${activeAuthoringSession.id}`);
+        if (detail.live) setAuthoringLiveCount(detail.live.actionCount);
+      } catch {
+        /* transient poll failure — keep the session open, try again next tick */
+      }
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [activeAuthoringSession]);
   async function download(id: string, kind: string) {
     await action(async () => {
       const res = await fetch(API + "/artifacts/" + id, {
@@ -605,6 +669,10 @@ export default function Home() {
               <Users />
               Personas
             </TabsTrigger>
+            <TabsTrigger value="teach">
+              <Video />
+              Teach / Record
+            </TabsTrigger>
             <TabsTrigger value="safety">
               <ShieldCheck />
               Safety & coverage
@@ -637,9 +705,11 @@ export default function Home() {
                               ? "What an endpoint should do, and where it may be called"
                               : tab === "personas"
                                 ? "Verified is signed in for real. Nothing else counts."
-                                : tab === "safety"
-                                  ? "Confidence needs evidence"
-                                  : "Connect your test environment"}
+                                : tab === "teach"
+                                  ? "Perform it once. Review turns it into a test."
+                                  : tab === "safety"
+                                    ? "Confidence needs evidence"
+                                    : "Connect your test environment"}
               </h1>
               <p>
                 {tab === "workspace"
@@ -658,9 +728,11 @@ export default function Home() {
                               ? "A contract, its environment, and its network authority are approved separately. All three are required before any real call runs."
                               : tab === "personas"
                                 ? "A persona only becomes usable after a real, visible sign-in confirms its identity — never a saved claim."
-                                : tab === "safety"
-                                  ? "A bounded first version, with clear limits and no silent changes to expected behavior."
-                                  : "Start with an isolated test application, then verify your Lawcus staging access."}
+                                : tab === "teach"
+                                  ? "A visible Chromium window opens for you to demonstrate the workflow. Nothing recorded is trusted or executed automatically — it only ever becomes a proposal."
+                                  : tab === "safety"
+                                    ? "A bounded first version, with clear limits and no silent changes to expected behavior."
+                                    : "Start with an isolated test application, then verify your Lawcus staging access."}
               </p>
             </div>
             <div className="connection">
@@ -1627,6 +1699,89 @@ export default function Home() {
                     Cancel sign-in
                   </Button>
                 </div>
+              )}
+            </div>
+          </TabsContent>
+          <TabsContent value="teach">
+            {!activeAuthoringSession ? (
+              <div className="panel question-panel">
+                <span className="section-label">TEACH / RECORD WORKFLOW</span>
+                <h2>Show Lawcus QA a workflow by performing it</h2>
+                <p className="subtle">
+                  A separate, controlled Chromium window opens with the same environment and network
+                  policy every trusted run uses. Perform the workflow there yourself — nothing you do
+                  is executed automatically or saved as a trusted test. When you finish, it becomes
+                  proposals for you to review in Proposals.
+                </p>
+                <div className="inline">
+                  <Select
+                    value={authoringForm.environmentId}
+                    onValueChange={(environmentId) => setAuthoringForm({ ...authoringForm, environmentId })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="fixture">Local test application</SelectItem>
+                      <SelectItem value="lawcus">Lawcus staging</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Input
+                  value={authoringForm.featureName}
+                  onChange={(e) => setAuthoringForm({ ...authoringForm, featureName: e.target.value })}
+                  placeholder="Feature, e.g. “Contacts”"
+                  maxLength={80}
+                />
+                <Textarea
+                  value={authoringForm.workflowDescription}
+                  onChange={(e) => setAuthoringForm({ ...authoringForm, workflowDescription: e.target.value })}
+                  placeholder="Describe the workflow you'll demonstrate, e.g. “Edit a contact's custom field and save”"
+                  maxLength={300}
+                />
+                <Button disabled={busy} onClick={startAuthoring}>
+                  <Video />
+                  Start recording
+                </Button>
+              </div>
+            ) : (
+              <div className="panel question-panel">
+                <span className="section-label">RECORDING IN PROGRESS</span>
+                <h2>{activeAuthoringSession.feature_name}</h2>
+                <p className="subtle">{activeAuthoringSession.workflow_description}</p>
+                <p role="status" className="small-note">
+                  {authoringLiveCount} action(s) captured so far. Perform the workflow in the separate
+                  Chromium window, then come back here.
+                </p>
+                <div className="inline">
+                  <Button disabled={busy} onClick={finishAuthoring}>
+                    <Check />
+                    Finish & create proposals
+                  </Button>
+                  <Button variant="outline" disabled={busy} onClick={discardAuthoring}>
+                    <X />
+                    Discard
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="panel question-panel">
+              <span className="section-label">PAST SESSIONS</span>
+              {!state?.authoringSessions.length ? (
+                <div className="empty-small">
+                  <Video />
+                  <h2>No recordings yet</h2>
+                </div>
+              ) : (
+                state.authoringSessions.map((s) => (
+                  <div className="list-row" key={s.id}>
+                    <div>
+                      <h3>
+                        {s.feature_name} — {s.workflow_description}
+                      </h3>
+                      <p className="subtle">{date(s.started_at)}</p>
+                    </div>
+                    <Badge variant="outline">{s.status}</Badge>
+                  </div>
+                ))
               )}
             </div>
           </TabsContent>

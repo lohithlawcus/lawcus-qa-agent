@@ -3,7 +3,7 @@ import {randomUUID,randomBytes} from 'node:crypto';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {readSecret} from './secrets.mjs';
-import {savePersonaState} from './persona-session.mjs';
+import {savePersonaState,loadPersonaState} from './persona-session.mjs';
 import {sealEvidence,saveCredentials,CredentialSetup} from './setup.mjs';
 import {startEgress} from './egress.mjs';
 import {Plan} from './contracts.mjs';
@@ -14,6 +14,7 @@ import {now} from './store.mjs';
 import {STAGING,API_ORIGIN,ASSETS} from './environment-adapter.mjs';
 export {STAGING,API_ORIGIN,ASSETS};
 import {attachNetworkObserver,correlateObservation} from './network-observer.mjs';
+import {attachRecorder} from './recorder.mjs';
 import {ApiContractError} from './api-contracts.mjs';
 // V5 Step 11 / section 23 — which real API request each login scenario is
 // expected to trigger. 'logout' is intentionally absent: no logout API
@@ -330,5 +331,60 @@ export async function verifyPersonaInBrowser({personas,personaId,artifactDirecto
  }finally{
   clearTimeout(timer);signal.removeEventListener('abort',cancel);candidate=null;
   await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
+ }
+}
+
+// V5 Step 14 / section 29.1 — Controlled Codegen context. Opens a real,
+// visible Chromium window the operator manually performs a workflow in,
+// with the SAME environment/network policy every trusted run already
+// uses — never an unrestricted browser. Stays open (unlike every other
+// function in this file) until the caller explicitly calls finish() or
+// abort(), because recording is an open-ended human activity, not a
+// bounded scripted scenario.
+export async function startAuthoringSession({environmentId,origin,personaId=null,personas=null,personaDirectory}){
+ let browser,proxy,context;
+ try{
+  if(environmentId==='lawcus'){
+   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
+  }else if(environmentId!=='fixture'){
+   throw new Error('Unknown environment for an authoring session.');
+  }
+  browser=await launch(proxy,false);
+  let storageState;
+  if(personaId){
+   const persona=personas.resolveVerifiedPersona(personaId);
+   storageState=(await loadPersonaState(personaDirectory,personaId))||undefined;
+   if(!storageState)throw new Error(`Persona "${persona.label}" has no saved session yet — sign in as this persona in Personas first.`);
+  }
+  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,...(storageState?{storageState}:{})});
+  context.setDefaultTimeout(20000);context.setDefaultNavigationTimeout(25000);
+  await context.routeWebSocket(/.*/,socket=>socket.close());
+  if(environmentId==='lawcus')
+   await context.route('**/*',async route=>{
+    if(!permitLiveRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+    await route.continue();
+   });
+  const recorder=await attachRecorder(context,{personaLabel:personaId?'persona':null});
+  const observer=attachNetworkObserver(context);
+  const page=await context.newPage();
+  page.on('dialog',d=>void d.dismiss());
+  await page.goto((environmentId==='lawcus'?STAGING:origin)+(storageState?'':'/login'),{waitUntil:'domcontentloaded'});
+  return {
+   status(){return {actionCount:recorder.actions.length,networkCount:observer.events.length};},
+   async finish(){
+    const actions=[...recorder.actions];
+    const networkEvents=[...observer.events];
+    const consoleEntries=[...observer.consoleEntries];
+    observer.dispose();
+    await context.close().catch(()=>{});await browser.close().catch(()=>{});await proxy?.close().catch(()=>{});
+    return {actions,networkEvents,consoleEntries};
+   },
+   async abort(){
+    await context.close().catch(()=>{});await browser.close().catch(()=>{});await proxy?.close().catch(()=>{});
+   },
+  };
+ }catch(error){
+  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
+  throw error;
  }
 }
