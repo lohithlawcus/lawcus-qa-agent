@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
 import {publicIPv4,startEgress} from '../core/egress.mjs';
-import {permitLiveRequest,STAGING,API_ORIGIN,ASSETS} from '../core/live-runner.mjs';
+import {permitLiveRequest,permitContactsRequest,STAGING,API_ORIGIN,ASSETS} from '../core/live-runner.mjs';
 import {sealEvidence,openEvidence,CredentialSetup} from '../core/setup.mjs';
 import {createOpenAIProvider} from '../ai/providers/openai.mjs';
 
@@ -18,6 +18,19 @@ test('Staging blocks other tenants, metadata, credentialed URLs and business wri
  assert.equal(permitLiveRequest(API_ORIGIN+'/forcelogout','POST','fetch'),true);
  assert.equal(permitLiveRequest(API_ORIGIN+'/forcelogout','DELETE','fetch'),false);
  assert.equal(permitLiveRequest(ASSETS+'/app.js','GET','script'),true);
+});
+test('Contacts policy is permitLiveRequest plus exactly one write shape — PUT /contacts/:uuid — nothing broader',()=>{
+ assert.equal(permitContactsRequest(API_ORIGIN+'/login','POST','fetch'),true);
+ assert.equal(permitContactsRequest(ASSETS+'/app.js','GET','script'),true);
+ assert.equal(permitContactsRequest(API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT','fetch'),true);
+ for(const [url,method] of [
+  [API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','DELETE'],
+  [API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','POST'],
+  [API_ORIGIN+'/contacts/not-a-uuid','PUT'],
+  [API_ORIGIN+'/customfields','PUT'],
+  [API_ORIGIN+'/matters/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
+  ['https://user:password@'+API_ORIGIN.replace('https://','')+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
+ ])assert.equal(permitContactsRequest(url,method,'fetch'),false,`${method} ${url}`);
 });
 test('DNS rebinding to private or mixed address sets fails before the proxy opens',async()=>{
  for(const addresses of [['127.0.0.1'],['169.254.169.254'],['93.184.216.34','10.0.0.1'],[]])
