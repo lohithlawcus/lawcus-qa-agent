@@ -8,7 +8,6 @@ import {
   ShieldCheck,
   FlaskConical,
   History,
-  BookOpen,
   LockKeyhole,
   Check,
   X,
@@ -634,10 +633,6 @@ export default function Home() {
               <Terminal />
               Test workspace
             </TabsTrigger>
-            <TabsTrigger value="saved">
-              <BookOpen />
-              Saved tests
-            </TabsTrigger>
             <TabsTrigger value="testbook">
               <ListChecks />
               TestBook
@@ -691,10 +686,8 @@ export default function Home() {
               <h1>
                 {tab === "workspace"
                   ? "What would you like to test?"
-                  : tab === "saved"
-                    ? "Your reusable tests"
-                    : tab === "testbook"
-                      ? "The record of what's actually proven"
+                  : tab === "testbook"
+                    ? "The record of what's actually proven"
                       : tab === "history"
                         ? "Every run, accounted for"
                         : tab === "proposals"
@@ -714,10 +707,8 @@ export default function Home() {
               <p>
                 {tab === "workspace"
                   ? "Describe the intent. Review the checks. Let the runner handle the steps."
-                  : tab === "saved"
-                    ? "Saved logical tests stay separate from their browser execution paths."
-                    : tab === "testbook"
-                      ? "Feature → suite → test case, each on a versioned definition, with its real execution history."
+                  : tab === "testbook"
+                    ? "Feature → suite → test case, each on a versioned definition, with its real execution history."
                       : tab === "history"
                         ? "Results and evidence are retained, including failed and interrupted runs."
                         : tab === "proposals"
@@ -1111,47 +1102,6 @@ export default function Home() {
                   </p>
                 </div>
               </aside>
-            </div>
-          </TabsContent>
-          <TabsContent value="saved">
-            <div className="panel">
-              {!state?.runbooks.length ? (
-                <div className="empty-small">
-                  <BookOpen />
-                  <h2>No saved tests yet</h2>
-                  <p>Create your first login plan in the test workspace.</p>
-                  <Button onClick={() => setTab("workspace")}>
-                    Create a test
-                  </Button>
-                </div>
-              ) : (
-                state.runbooks.map((book) => (
-                  <div className="list-row" key={book.id}>
-                    <div>
-                      <h3>{book.title}</h3>
-                      <p>
-                        {book.intent} · Version {book.version} ·{" "}
-                        {book.definition.scenarios.length} checks
-                      </p>
-                      <span className="subtle">
-                        {date(book.created_at)} ·{" "}
-                        {book.source === "built-in"
-                          ? "Built-in planner"
-                          : book.source === "openai" ? "OpenAI planner" : book.source === "standard" ? "Standard checks · no AI" : "Local model"}{" "}
-                        · {book.environment_id === "lawcus" ? "Lawcus staging" : "Local test application"}
-                      </span>
-                    </div>
-                    <Button
-                      variant="outline"
-                      disabled={busy || running}
-                      onClick={() => runTest(book.id)}
-                    >
-                      <Play />
-                      Run test
-                    </Button>
-                  </div>
-                ))
-              )}
             </div>
           </TabsContent>
           <TabsContent value="testbook">
