@@ -25,6 +25,47 @@ function requireHumanApprover(approver) {
     );
 }
 
+// Naming convention from LAWCUS_QA_KNOWLEDGE_BASE_GUIDE.md section 30 —
+// a semantic ID must lead with its type's prefix so a human reference like
+// "BR-CF-RENAME-001" is legible without looking up the type column. Every
+// type except FEATURE also ends in a zero-padded sequence number: a
+// Feature is a single canonical slug (one feature = one ID), while every
+// other type can have many atomic facts per feature and needs the
+// sequence to disambiguate them (guide section 3: one record = one rule).
+export const TYPE_PREFIXES = {
+  FEATURE: "FEATURE",
+  BUSINESS_RULE: "BR",
+  FIELD_RULE: "FIELD",
+  PERMISSION_RULE: "PERM",
+  DEPENDENCY: "DEP",
+  WORKFLOW_RULE: "WF",
+  API_CONTRACT: "API",
+  UI_ACTION: "UI",
+  TEST_DATA_RULE: "DATA",
+  ENVIRONMENT_RULE: "ENV",
+  KNOWN_LIMITATION: "LIMIT",
+  RELEASE_CHANGE: "CHANGE",
+  INTEGRATION_RULE: "INT",
+  VALIDATION_RULE: "VAL",
+  CALCULATION_RULE: "CALC",
+  SECURITY_RULE: "SEC",
+  EDGE_CASE: "EDGE",
+};
+
+export function validateSemanticId(type, semanticId) {
+  const prefix = TYPE_PREFIXES[type];
+  if (!prefix) throw new KnowledgeError("unknown_type", `Unknown Knowledge type: ${type}`);
+  const pattern =
+    type === "FEATURE"
+      ? new RegExp(`^${prefix}-[A-Z0-9]+(-[A-Z0-9]+)*$`)
+      : new RegExp(`^${prefix}-[A-Z0-9]+(-[A-Z0-9]+)*-\\d{3}$`);
+  if (!pattern.test(semanticId))
+    throw new KnowledgeError(
+      "invalid_semantic_id",
+      `"${semanticId}" does not match the required ${prefix}-... naming convention for type ${type} (Knowledge Base guide section 30).`,
+    );
+}
+
 export function openKnowledge(db, audit) {
   function ensureFeature(name, description) {
     let feature = db.prepare("SELECT * FROM features WHERE name=?").get(name);
@@ -56,6 +97,42 @@ export function openKnowledge(db, audit) {
     return { id, title, url, author };
   }
 
+  function linkApiContract(knowledgeItemId, apiContractSemanticId) {
+    const existing = db
+      .prepare("SELECT * FROM knowledge_item_api_contracts WHERE knowledge_item_id=? AND api_contract_semantic_id=?")
+      .get(knowledgeItemId, apiContractSemanticId);
+    if (existing) return existing;
+    const id = randomUUID();
+    db.prepare(
+      "INSERT INTO knowledge_item_api_contracts(id,knowledge_item_id,api_contract_semantic_id,created_at) VALUES(?,?,?,?)",
+    ).run(id, knowledgeItemId, apiContractSemanticId, now());
+    return db.prepare("SELECT * FROM knowledge_item_api_contracts WHERE id=?").get(id);
+  }
+
+  function linkTest(knowledgeItemId, testCaseExternalId) {
+    const existing = db
+      .prepare("SELECT * FROM knowledge_item_tests WHERE knowledge_item_id=? AND test_case_external_id=?")
+      .get(knowledgeItemId, testCaseExternalId);
+    if (existing) return existing;
+    const id = randomUUID();
+    db.prepare(
+      "INSERT INTO knowledge_item_tests(id,knowledge_item_id,test_case_external_id,created_at) VALUES(?,?,?,?)",
+    ).run(id, knowledgeItemId, testCaseExternalId, now());
+    return db.prepare("SELECT * FROM knowledge_item_tests WHERE id=?").get(id);
+  }
+
+  function itemLinks(knowledgeItemId) {
+    const apiContracts = db
+      .prepare("SELECT api_contract_semantic_id FROM knowledge_item_api_contracts WHERE knowledge_item_id=?")
+      .all(knowledgeItemId)
+      .map((r) => r.api_contract_semantic_id);
+    const relatedTests = db
+      .prepare("SELECT test_case_external_id FROM knowledge_item_tests WHERE knowledge_item_id=?")
+      .all(knowledgeItemId)
+      .map((r) => r.test_case_external_id);
+    return { apiContracts, relatedTests };
+  }
+
   /**
    * Proposes one atomic Knowledge item (section 8.1). Idempotent by
    * semantic_id + statement: proposing the exact same statement again does
@@ -64,6 +141,17 @@ export function openKnowledge(db, audit) {
    * versions are never rewritten. Always enters as pending_review,
    * regardless of provenance quality; PRODUCT_APPROVED describes where the
    * fact came from, not that it skips review.
+   *
+   * semanticId must follow the type's naming convention (section 30);
+   * appliesTo/preconditions are string arrays, expectedBehavior a
+   * free-form object keyed by record state (e.g. existing_contact,
+   * new_lead — section 19), all optional since not every type needs them
+   * (a FEATURE record has no "existing vs new" behavior to state).
+   * apiContracts/relatedTests link this fact to the specific evidence that
+   * backs it (section 6) — every id is stored, but only relatedTests is
+   * checked for real existence (test_case_external_id is a real FK);
+   * apiContracts trusts the caller to cite a real semantic_id, same as
+   * every other "do not invent" discipline in this project.
    */
   function proposeItem({
     semanticId,
@@ -75,7 +163,16 @@ export function openKnowledge(db, audit) {
     doesNotMean = null,
     provenance,
     source = null,
+    appliesTo = null,
+    preconditions = null,
+    expectedBehavior = null,
+    effectiveFrom = null,
+    effectiveUntil = null,
+    release = null,
+    apiContracts = [],
+    relatedTests = [],
   }) {
+    validateSemanticId(type, semanticId);
     const feature = ensureFeature(featureName, featureDescription);
     const sourceRow = source ? ensureSource(source) : null;
     const latest = db
@@ -83,14 +180,19 @@ export function openKnowledge(db, audit) {
         "SELECT * FROM knowledge_items WHERE semantic_id=? ORDER BY version DESC LIMIT 1",
       )
       .get(semanticId);
-    if (latest && latest.statement === statement) return latest;
+    if (latest && latest.statement === statement) {
+      for (const apiSemanticId of apiContracts) linkApiContract(latest.id, apiSemanticId);
+      for (const externalId of relatedTests) linkTest(latest.id, externalId);
+      return latest;
+    }
     const nextVersion = (latest?.version || 0) + 1;
     const id = randomUUID();
     db.prepare(
       `INSERT INTO knowledge_items(
          id,semantic_id,version,type,feature_id,title,statement,does_not_mean,
-         provenance,source_id,status,supersedes,created_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         provenance,source_id,status,supersedes,created_at,
+         applies_to,preconditions,expected_behavior,effective_from,effective_until,release)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       id,
       semanticId,
@@ -105,7 +207,15 @@ export function openKnowledge(db, audit) {
       "pending_review",
       latest?.id ?? null,
       now(),
+      appliesTo ? JSON.stringify(appliesTo) : null,
+      preconditions ? JSON.stringify(preconditions) : null,
+      expectedBehavior ? JSON.stringify(expectedBehavior) : null,
+      effectiveFrom,
+      effectiveUntil,
+      release,
     );
+    for (const apiSemanticId of apiContracts) linkApiContract(id, apiSemanticId);
+    for (const externalId of relatedTests) linkTest(id, externalId);
     audit?.("knowledge.item.proposed", id, { semanticId, version: nextVersion, provenance });
     return db.prepare("SELECT * FROM knowledge_items WHERE id=?").get(id);
   }
@@ -197,6 +307,21 @@ export function openKnowledge(db, audit) {
       .all();
   }
 
+  /** Parses the JSON-array/object columns back out and attaches the
+   * item's real, existing links (never guessed) to specific API contracts
+   * and test cases — the row shape the UI actually renders. */
+  function withLinks(row) {
+    const links = itemLinks(row.id);
+    return {
+      ...row,
+      applies_to: row.applies_to ? JSON.parse(row.applies_to) : null,
+      preconditions: row.preconditions ? JSON.parse(row.preconditions) : null,
+      expected_behavior: row.expected_behavior ? JSON.parse(row.expected_behavior) : null,
+      api_contracts: links.apiContracts,
+      related_tests: links.relatedTests,
+    };
+  }
+
   function inboxItems() {
     return db
       .prepare(
@@ -204,7 +329,8 @@ export function openKnowledge(db, audit) {
          FROM knowledge_items JOIN features ON features.id = knowledge_items.feature_id
          WHERE knowledge_items.status='pending_review' ORDER BY knowledge_items.created_at`,
       )
-      .all();
+      .all()
+      .map(withLinks);
   }
 
   function inboxEdges() {
@@ -228,7 +354,8 @@ export function openKnowledge(db, audit) {
          FROM knowledge_items JOIN features ON features.id = knowledge_items.feature_id
          WHERE knowledge_items.status='approved' ORDER BY features.name, knowledge_items.type, knowledge_items.title`,
       )
-      .all();
+      .all()
+      .map(withLinks);
     const byFeature = new Map();
     for (const row of rows) {
       if (!byFeature.has(row.feature_name)) byFeature.set(row.feature_name, []);
@@ -249,5 +376,8 @@ export function openKnowledge(db, audit) {
     inboxItems,
     inboxEdges,
     approvedByFeature,
+    linkApiContract,
+    linkTest,
+    itemLinks,
   };
 }

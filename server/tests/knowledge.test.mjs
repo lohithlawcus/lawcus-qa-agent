@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { openStore } from "../core/store.mjs";
 import { openKnowledge, KnowledgeError } from "../core/knowledge.mjs";
 import { seedLawcusKnowledge } from "../knowledge/lawcus-seed.mjs";
+import { openTestBook } from "../core/testbook.mjs";
+import { loginTestCases } from "../core/runner.mjs";
 
 function withStore(fn) {
   const dir = mkdtempSync(join(tmpdir(), "qa-knowledge-"));
@@ -18,7 +20,7 @@ function withStore(fn) {
 }
 
 const BASE_ITEM = {
-  semanticId: "sample.rule",
+  semanticId: "BR-SAMPLE-RULE-001",
   type: "BUSINESS_RULE",
   featureName: "Sample Feature",
   featureDescription: "d",
@@ -53,7 +55,7 @@ test("proposing a changed statement for a known semantic_id appends a new versio
     const v2 = knowledge.proposeItem({ ...BASE_ITEM, statement: "A revised statement." });
     assert.equal(v2.version, 2);
     assert.equal(v2.supersedes, v1.id);
-    const rows = db.prepare("SELECT version, statement FROM knowledge_items WHERE semantic_id=? ORDER BY version").all("sample.rule");
+    const rows = db.prepare("SELECT version, statement FROM knowledge_items WHERE semantic_id=? ORDER BY version").all("BR-SAMPLE-RULE-001");
     assert.equal(rows.length, 2);
     assert.equal(rows[0].statement, BASE_ITEM.statement);
     assert.equal(rows[1].statement, "A revised statement.");
@@ -136,8 +138,113 @@ test("approvedGraph only ever returns approved edges — pending/rejected edges 
   });
 });
 
+test("proposeItem enforces the type's naming-convention prefix (guide section 30) and gives a clear error", () => {
+  withStore((knowledge) => {
+    assert.throws(
+      () => knowledge.proposeItem({ ...BASE_ITEM, semanticId: "contacts.person-or-company" }),
+      (e) => e instanceof KnowledgeError && e.code === "invalid_semantic_id",
+    );
+    assert.throws(
+      () => knowledge.proposeItem({ ...BASE_ITEM, semanticId: "DEP-CF-LEAD-001" }), // wrong prefix for BUSINESS_RULE
+      (e) => e instanceof KnowledgeError && e.code === "invalid_semantic_id",
+    );
+    assert.throws(
+      () => knowledge.proposeItem({ ...BASE_ITEM, semanticId: "BR-CF-RENAME" }), // missing sequence number
+      (e) => e instanceof KnowledgeError && e.code === "invalid_semantic_id",
+    );
+    assert.throws(
+      () => knowledge.proposeItem({ ...BASE_ITEM, type: "NOT_A_REAL_TYPE" }),
+      (e) => e instanceof KnowledgeError && e.code === "unknown_type",
+    );
+    // FEATURE records are exempt from the trailing sequence number — one
+    // feature is one canonical slug, not a series of atomic facts.
+    const feature = knowledge.proposeItem({
+      ...BASE_ITEM, type: "FEATURE", semanticId: "FEATURE-SAMPLE",
+    });
+    assert.equal(feature.semantic_id, "FEATURE-SAMPLE");
+  });
+});
+
+test("proposeItem round-trips applies_to/preconditions/expected_behavior/effective_from/release as structured data, not opaque strings", () => {
+  withStore((knowledge) => {
+    knowledge.proposeItem({
+      ...BASE_ITEM,
+      appliesTo: ["contact", "lead"],
+      preconditions: ["Custom field already exists"],
+      expectedBehavior: {
+        existing_contact: { field_name: "updated", field_value: "preserved" },
+        new_contact: { field_name: "updated" },
+      },
+      effectiveFrom: "2026-09",
+      release: "2026-09",
+    });
+    const item = knowledge.inboxItems()[0];
+    assert.deepEqual(item.applies_to, ["contact", "lead"]);
+    assert.deepEqual(item.preconditions, ["Custom field already exists"]);
+    assert.deepEqual(item.expected_behavior.existing_contact, { field_name: "updated", field_value: "preserved" });
+    assert.equal(item.effective_from, "2026-09");
+    assert.equal(item.release, "2026-09");
+  });
+});
+
+test("proposeItem with none of the optional structured fields leaves them null, not '[]' or '{}' placeholders", () => {
+  withStore((knowledge) => {
+    knowledge.proposeItem(BASE_ITEM);
+    const item = knowledge.inboxItems()[0];
+    assert.equal(item.applies_to, null);
+    assert.equal(item.preconditions, null);
+    assert.equal(item.expected_behavior, null);
+    assert.equal(item.effective_from, null);
+  });
+});
+
+test("linkApiContract/linkTest attach real evidence to a Knowledge item; itemLinks reads it back, idempotently", () => {
+  withStore((knowledge, db) => {
+    const item = knowledge.proposeItem(BASE_ITEM);
+    // A real test_cases row for the FK linkTest relies on.
+    const featureId = db.prepare("SELECT id FROM features WHERE name=?").get("Sample Feature").id;
+    db.prepare("INSERT INTO test_suites(id,feature_id,name,description,created_at) VALUES(?,?,?,?,?)")
+      .run("suite-1", featureId, "Sample Suite", "d", new Date().toISOString());
+    db.prepare(
+      "INSERT INTO test_cases(id,suite_id,external_id,title,description,layer,priority,risk,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+    ).run("case-1", "suite-1", "TC-SAMPLE-001", "t", "d", "ui", "normal", "normal", "approved", new Date().toISOString());
+
+    knowledge.linkApiContract(item.id, "lawcus.contacts.update");
+    knowledge.linkApiContract(item.id, "lawcus.contacts.update"); // idempotent
+    knowledge.linkTest(item.id, "TC-SAMPLE-001");
+
+    const links = knowledge.itemLinks(item.id);
+    assert.deepEqual(links.apiContracts, ["lawcus.contacts.update"]);
+    assert.deepEqual(links.relatedTests, ["TC-SAMPLE-001"]);
+
+    const fromInbox = knowledge.inboxItems()[0];
+    assert.deepEqual(fromInbox.api_contracts, ["lawcus.contacts.update"]);
+    assert.deepEqual(fromInbox.related_tests, ["TC-SAMPLE-001"]);
+  });
+});
+
+test("linkTest refuses a test_case_external_id that doesn't really exist (real FK, not a soft check)", () => {
+  withStore((knowledge) => {
+    const item = knowledge.proposeItem(BASE_ITEM);
+    assert.throws(() => knowledge.linkTest(item.id, "TC-DOES-NOT-EXIST"));
+  });
+});
+
 test("the real Lawcus seed proposes a substantial, deduplicated, correctly-sourced batch, none of it approved", () => {
   withStore((knowledge, db) => {
+    // Real server startup syncs the Authentication TestBook cases before
+    // seeding Knowledge (server/index.mjs), because the Authentication
+    // items below cite them as related_tests via a real FK — mirror that
+    // exact order here rather than seeding Knowledge in isolation.
+    const testbook = openTestBook(db, null);
+    testbook.syncCases({
+      featureName: "Authentication",
+      featureDescription: "Sign in, sign out, and session behavior for the Lawcus workspace.",
+      suiteName: "login-essentials",
+      suiteDescription: "The five bounded login checks currently automated against the local fixture.",
+      priority: "normal",
+      entries: loginTestCases,
+    });
     seedLawcusKnowledge(knowledge);
     const pending = knowledge.inboxItems();
     assert.ok(pending.length >= 25, `expected a substantial batch, got ${pending.length}`);

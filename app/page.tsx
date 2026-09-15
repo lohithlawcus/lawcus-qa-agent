@@ -133,6 +133,14 @@ type KnowledgeItem = {
   source_id: string | null;
   status: string;
   created_at: string;
+  applies_to: string[] | null;
+  preconditions: string[] | null;
+  expected_behavior: Record<string, Record<string, string>> | null;
+  effective_from: string | null;
+  effective_until: string | null;
+  release: string | null;
+  api_contracts: string[];
+  related_tests: string[];
 };
 type KnowledgeEdge = {
   id: string;
@@ -1297,10 +1305,16 @@ export default function Home() {
                       {items.map((k) => (
                         <div className="question" key={k.id}>
                           <div className="inline">
+                            <Badge variant="outline">{k.semantic_id}</Badge>
                             <Badge variant="outline">
                               {k.type.replaceAll("_", " ")}
                             </Badge>
                             <Badge variant="outline">{k.provenance}</Badge>
+                            {k.applies_to?.map((a) => (
+                              <Badge variant="outline" key={a}>
+                                {a.replaceAll("_", " ")}
+                              </Badge>
+                            ))}
                           </div>
                           <p>
                             <strong>{k.title}</strong>
@@ -1309,6 +1323,34 @@ export default function Home() {
                           {k.does_not_mean && (
                             <p className="subtle">
                               Does not mean: {k.does_not_mean}
+                            </p>
+                          )}
+                          {k.preconditions && k.preconditions.length > 0 && (
+                            <p className="subtle">
+                              Preconditions: {k.preconditions.join("; ")}
+                            </p>
+                          )}
+                          {k.expected_behavior && (
+                            <p className="subtle">
+                              {Object.entries(k.expected_behavior)
+                                .map(
+                                  ([state, fields]) =>
+                                    `${state.replaceAll("_", " ")}: ${Object.entries(
+                                      fields,
+                                    )
+                                      .map(([f, v]) => `${f}=${v}`)
+                                      .join(", ")}`,
+                                )
+                                .join(" · ")}
+                            </p>
+                          )}
+                          {(k.api_contracts.length > 0 || k.related_tests.length > 0) && (
+                            <p className="small-note">
+                              {k.api_contracts.length > 0 &&
+                                `API: ${k.api_contracts.join(", ")}`}
+                              {k.api_contracts.length > 0 && k.related_tests.length > 0 && " · "}
+                              {k.related_tests.length > 0 &&
+                                `Tests: ${k.related_tests.join(", ")}`}
                             </p>
                           )}
                           <label className="sr-only" htmlFor={"note-k-" + k.id}>
@@ -1390,8 +1432,25 @@ export default function Home() {
                     {group.items.map((k) => (
                       <div className="list-row" key={k.id}>
                         <div>
+                          <div className="inline">
+                            <Badge variant="outline">{k.semantic_id}</Badge>
+                            {k.applies_to?.map((a) => (
+                              <Badge variant="outline" key={a}>
+                                {a.replaceAll("_", " ")}
+                              </Badge>
+                            ))}
+                          </div>
                           <h3>{k.title}</h3>
                           <p className="subtle">{k.statement}</p>
+                          {(k.api_contracts.length > 0 || k.related_tests.length > 0) && (
+                            <p className="small-note">
+                              {k.api_contracts.length > 0 &&
+                                `API: ${k.api_contracts.join(", ")}`}
+                              {k.api_contracts.length > 0 && k.related_tests.length > 0 && " · "}
+                              {k.related_tests.length > 0 &&
+                                `Tests: ${k.related_tests.join(", ")}`}
+                            </p>
+                          )}
                         </div>
                         <Badge variant="outline">v{k.version}</Badge>
                       </div>
