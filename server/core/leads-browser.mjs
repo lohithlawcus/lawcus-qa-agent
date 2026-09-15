@@ -23,7 +23,10 @@ async function openEditMatterCustomFields(page) {
   await page.getByText("Edit lead", { exact: true }).click();
   await page.getByText("Update Lead", { exact: false }).first().waitFor({ timeout: 10000 });
   await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page.getByText("Client Details", { exact: true }).waitFor({ timeout: 10000 });
+  // "Client Details" appears twice on Step 2 (a sidebar nav label and a
+  // section heading in the content area) — .first() avoids a strict-mode
+  // violation; either match is equally good evidence Step 2 has rendered.
+  await page.getByText("Client Details", { exact: true }).first().waitFor({ timeout: 10000 });
   // "Custom Fields" also matches Step 1's (now unmounted or hidden)
   // sidebar entry in a broad text search, so anchor on the last match —
   // Step 2's, which is what's actually on screen at this point.
