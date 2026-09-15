@@ -1,4 +1,5 @@
-import {runLive,checkBrowser,liveDescriptions,connectInBrowser} from './core/live-runner.mjs';
+import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser} from './core/live-runner.mjs';
+import { openPersonas, PersonaRegistration } from './core/personas.mjs';
 import { createModelRouter, recordModelUsage } from './ai/router.mjs';
 import { createOpenAIProvider } from './ai/providers/openai.mjs';
 import {keychain, readSecret} from './core/secrets.mjs';
@@ -103,6 +104,10 @@ const apiClient = createSafeApiClient({ environmentAdapter, networkAuthority, ap
 // (server/core/network-observer.mjs), wired into the live staging runner
 // below so its results can be attributed to an exact run/scenario.
 const networkObservations = openNetworkObservations(db, audit);
+// V5 Step 12 — Persona Session Foundation (section 18). Registering a
+// persona is cheap/reversible; only verifyPersonaInBrowser's visible
+// sign-in (wired below) can ever move one to 'verified'.
+const personas = openPersonas(db, audit);
 // section 14: only an interactive operator identity may approve or reject —
 // never the runner, AI planner, recorder or network observer. This service
 // is single-operator (one Mac, one local session), so the OS account name
@@ -126,7 +131,12 @@ let savingCredentials=false;
 let planning=false;
 let connection={status:'idle',message:''};
 let connectionController=null;
+// V5 Step 12 — one persona visible sign-in at a time, same constraint as
+// the primary account's connection state above.
+let personaConnection={status:'idle',message:''};
+let personaConnectionController=null;
 const connecting=()=>['starting','waiting'].includes(connection.status);
+const personaConnecting=()=>['starting','waiting'].includes(personaConnection.status);
 function same(a, b) {
   return (
     typeof a === "string" &&
@@ -274,8 +284,41 @@ const server = createServer(
       if(req.method==='GET'&&pathname==='/setup/status'){json(res,200,await setupStatus());return;}
       if(req.method==='POST'&&pathname==='/setup/credentials'){
         const input=CredentialSetup.parse(await body(req));
+        // V5 Step 12 / section 18: a persona's whole point is a VERIFIED
+        // identity. This bypass form-save path (no identity confirmation)
+        // stays reserved for the primary account only — a persona
+        // credential may only be set by the visible sign-in flow below,
+        // after Playwright itself confirms the resulting identity.
+        if(input.kind==='lawcus-persona'){json(res,400,{error:'Persona accounts must be verified through visible sign-in, not saved directly.'});return;}
         if(connecting()||savingCredentials||db.prepare("SELECT 1 FROM runs WHERE status='running'").get()){json(res,409,{error:'Wait for the active operation before changing credentials.'});return;}
         savingCredentials=true;try{const result=await saveCredentials(input);audit('setup.credential-saved',input.kind,{storage:'macOS Keychain'});json(res,200,result);}finally{savingCredentials=false;}return;
+      }
+      if(req.method==='POST'&&pathname==='/personas'){
+        const input=PersonaRegistration.parse(await body(req));
+        const persona=personas.registerPersona(input);
+        json(res,201,persona);return;
+      }
+      if(req.method==='GET'&&pathname==='/personas/verify'){json(res,200,personaConnection);return;}
+      if(req.method==='POST'&&pathname==='/personas/verify/cancel'){personaConnectionController?.abort();json(res,200,{message:'Cancelling persona sign-in.'});return;}
+      const personaVerify=/^\/personas\/([a-f0-9-]{36})\/verify$/.exec(pathname);
+      if(req.method==='POST'&&personaVerify){
+        if(personaConnecting()||db.prepare("SELECT 1 FROM runs WHERE status='running'").get()){json(res,409,{error:'Wait for the current operation to finish.'});return;}
+        const recent=db.prepare("SELECT COUNT(*) n FROM audit_events WHERE action='persona.visible-login-started' AND created_at>?").get(new Date(Date.now()-600000).toISOString());
+        if(recent.n>=3){json(res,429,{error:'Three visible persona sign-ins were started in ten minutes. Please wait before another.'});return;}
+        const personaId=personaVerify[1];
+        audit('persona.visible-login-started',personaId,{});
+        personaConnection={status:'starting',message:'Opening a separate Chromium window for the persona sign-in.'};
+        personaConnectionController=new AbortController();
+        void verifyPersonaInBrowser({personas,personaId,artifactDirectory,verifiedBy:approverIdentity,audit,signal:personaConnectionController.signal,onState:value=>{personaConnection=value;}})
+          .then(value=>{personaConnection=value;})
+          .catch(error=>{personaConnection={status:'failed',message:error instanceof Error&&error.message.length<200?error.message:'Visible persona sign-in could not be verified. Nothing was saved.'};});
+        json(res,202,personaConnection);return;
+      }
+      const personaRevoke=/^\/personas\/([a-f0-9-]{36})\/revoke$/.exec(pathname);
+      if(req.method==='POST'&&personaRevoke){
+        const input=DecisionRequest.parse(await body(req));
+        const persona=personas.revoke(personaRevoke[1],{revokedBy:approverIdentity,reason:input.note??null});
+        json(res,200,persona);return;
       }
       // V5 Step 10 / Milestone 2 DoD — "one real authorized staging contract
       // verified end-to-end". Purpose-built to exactly one contract, not a
@@ -339,6 +382,7 @@ const server = createServer(
           environmentAdaptersApproved: environmentAdapter.approved(),
           networkAuthoritiesInbox: networkAuthority.inbox(),
           networkAuthoritiesApproved: networkAuthority.approved(),
+          personas: personas.list(),
           audit: db
             .prepare(
               "SELECT * FROM audit_events ORDER BY sequence DESC LIMIT 30",

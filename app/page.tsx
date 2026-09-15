@@ -26,10 +26,12 @@ import {
   Network,
   Webhook,
   Waypoints,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -187,6 +189,7 @@ type State = {
   environmentAdaptersApproved: EnvironmentAdapter[];
   networkAuthoritiesInbox: NetworkAuthorityRow[];
   networkAuthoritiesApproved: NetworkAuthorityRow[];
+  personas: Persona[];
   audit: { id: string; action: string; created_at: string }[];
   planner: string;
 };
@@ -216,6 +219,17 @@ type ConsoleObservation = {
   scenario_result_id: string | null;
   level: string;
   message: string;
+};
+type Persona = {
+  id: string;
+  environment_id: string;
+  role: string;
+  label: string;
+  credential_account: string;
+  expected_username: string | null;
+  status: string;
+  session_status: string;
+  created_at: string;
 };
 type Detail = Run & {
   results: {
@@ -286,6 +300,8 @@ export default function Home() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [personaConnection, setPersonaConnection] = useState<{ status: string; message: string } | null>(null);
+  const [personaForm, setPersonaForm] = useState({ role: "admin", label: "", credentialAccount: "lawcus-persona-admin" });
   const refresh = useCallback(async () => {
     setState(await request<State>("/state"));
   }, []);
@@ -455,6 +471,49 @@ export default function Home() {
       await refresh();
     });
   }
+  async function registerPersona() {
+    await action(async () => {
+      if (!personaForm.label.trim()) throw new Error("Give this persona a label.");
+      await request("/personas", { environmentId: "lawcus", ...personaForm });
+      setPersonaForm({ role: "admin", label: "", credentialAccount: "lawcus-persona-admin" });
+      setMessage("Persona registered. It stays unusable until verified by visible sign-in.");
+      await refresh();
+    });
+  }
+  async function verifyPersona(id: string) {
+    await action(async () => {
+      const value = await request<{ status: string; message: string }>(`/personas/${id}/verify`, {});
+      setPersonaConnection({ status: value.status || "failed", message: value.message || "" });
+    });
+  }
+  async function cancelPersonaVerify() {
+    await request("/personas/verify/cancel", {});
+  }
+  async function revokePersona(id: string) {
+    await action(async () => {
+      await request(`/personas/${id}/revoke`, {});
+      setMessage("Persona revoked. It must be re-verified before use.");
+      await refresh();
+    });
+  }
+  useEffect(() => {
+    if (!personaConnection || !["starting", "waiting"].includes(personaConnection.status)) return;
+    const timer = setInterval(async () => {
+      try {
+        const value = await request<{ status: string; message: string }>("/personas/verify");
+        setPersonaConnection({ status: value.status || "failed", message: value.message || "" });
+        if (!["starting", "waiting"].includes(value.status || "")) {
+          if (value.status === "passed") {
+            setMessage(value.message || "Persona verified.");
+            await refresh();
+          } else setError(value.message || "Persona sign-in could not be verified.");
+        }
+      } catch {
+        setPersonaConnection(null);
+      }
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [personaConnection, refresh]);
   async function download(id: string, kind: string) {
     await action(async () => {
       const res = await fetch(API + "/artifacts/" + id, {
@@ -541,6 +600,10 @@ export default function Home() {
               API Contracts
               {pendingApiCount > 0 && <Badge variant="outline">{pendingApiCount}</Badge>}
             </TabsTrigger>
+            <TabsTrigger value="personas">
+              <Users />
+              Personas
+            </TabsTrigger>
             <TabsTrigger value="safety">
               <ShieldCheck />
               Safety & coverage
@@ -571,9 +634,11 @@ export default function Home() {
                             ? "Observed is evidence. Approved is truth."
                             : tab === "api"
                               ? "What an endpoint should do, and where it may be called"
-                              : tab === "safety"
-                                ? "Confidence needs evidence"
-                                : "Connect your test environment"}
+                              : tab === "personas"
+                                ? "Verified is signed in for real. Nothing else counts."
+                                : tab === "safety"
+                                  ? "Confidence needs evidence"
+                                  : "Connect your test environment"}
               </h1>
               <p>
                 {tab === "workspace"
@@ -590,9 +655,11 @@ export default function Home() {
                             ? "Every rule below cites its source. Nothing becomes trusted product truth until you approve it."
                             : tab === "api"
                               ? "A contract, its environment, and its network authority are approved separately. All three are required before any real call runs."
-                              : tab === "safety"
-                                ? "A bounded first version, with clear limits and no silent changes to expected behavior."
-                                : "Start with an isolated test application, then verify your Lawcus staging access."}
+                              : tab === "personas"
+                                ? "A persona only becomes usable after a real, visible sign-in confirms its identity — never a saved claim."
+                                : tab === "safety"
+                                  ? "A bounded first version, with clear limits and no silent changes to expected behavior."
+                                  : "Start with an isolated test application, then verify your Lawcus staging access."}
               </p>
             </div>
             <div className="connection">
@@ -1468,6 +1535,93 @@ export default function Home() {
                   </div>
                 ))}
               </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="personas">
+            <div className="panel question-panel">
+              <span className="section-label">REGISTER A PERSONA</span>
+              <h2>Add a controlled QA identity</h2>
+              <p className="subtle">
+                Registering only reserves the identity and its Keychain slot. It stays unusable
+                until a real, visible sign-in confirms who actually authenticated.
+              </p>
+              <div className="inline">
+                <Select
+                  value={personaForm.role}
+                  onValueChange={(role) =>
+                    setPersonaForm({ role, label: personaForm.label, credentialAccount: `lawcus-persona-${role.replace("_", "-")}` })
+                  }
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="admin">Admin</SelectItem>
+                    <SelectItem value="member">Member</SelectItem>
+                    <SelectItem value="co_counsel">Co-counsel</SelectItem>
+                    <SelectItem value="custom">Custom role</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  value={personaForm.label}
+                  onChange={(e) => setPersonaForm({ ...personaForm, label: e.target.value })}
+                  placeholder="Label, e.g. “QA Admin”"
+                  maxLength={80}
+                />
+                <Button disabled={busy} onClick={registerPersona}>
+                  <Users />
+                  Register
+                </Button>
+              </div>
+            </div>
+            <div className="panel question-panel">
+              <span className="section-label">PERSONAS</span>
+              {!state?.personas.length ? (
+                <div className="empty-small">
+                  <Users />
+                  <h2>No personas registered yet</h2>
+                  <p>Register one above, then verify it with a real visible sign-in.</p>
+                </div>
+              ) : (
+                state.personas.map((p) => (
+                  <div className="question" key={p.id}>
+                    <div className="inline">
+                      <Badge variant="outline">{p.role.replaceAll("_", " ")}</Badge>
+                      <Badge variant="outline">{p.status.replaceAll("_", " ")}</Badge>
+                      {p.status === "verified" && <Badge variant="outline">session: {p.session_status}</Badge>}
+                    </div>
+                    <p>
+                      <strong>{p.label}</strong>
+                    </p>
+                    <p className="subtle">
+                      {p.credential_account}
+                      {p.expected_username ? ` · ${p.expected_username}` : ""}
+                    </p>
+                    <div className="inline">
+                      {p.status !== "verified" && (
+                        <Button disabled={busy} onClick={() => verifyPersona(p.id)}>
+                          <ShieldCheck />
+                          Verify with visible sign-in
+                        </Button>
+                      )}
+                      {p.status === "verified" && (
+                        <Button variant="outline" disabled={busy} onClick={() => revokePersona(p.id)}>
+                          <X />
+                          Revoke
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+              {personaConnection && ["starting", "waiting"].includes(personaConnection.status) && (
+                <div className="question">
+                  <p role="status" className="small-note">
+                    {personaConnection.message}
+                  </p>
+                  <Button variant="outline" onClick={cancelPersonaVerify}>
+                    Cancel sign-in
+                  </Button>
+                </div>
+              )}
             </div>
           </TabsContent>
           <TabsContent value="safety">

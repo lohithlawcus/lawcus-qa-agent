@@ -1,6 +1,11 @@
 import {spawn} from 'node:child_process';
 import {resolve} from 'node:path';
-const accounts=new Set(['lawcus-login','openai-api','artifact-key']);
+// V5 Step 12 — one fixed Keychain slot per persona role (section 18). A
+// literal allowlist, not a pattern: a new role needs a deliberate edit
+// here, same discipline as a new primitive needing a deliberate hash
+// (section 12's "engineering review required for new capability" applied
+// to credential storage too).
+const accounts=new Set(['lawcus-login','openai-api','artifact-key','lawcus-persona-admin','lawcus-persona-member','lawcus-persona-co-counsel','lawcus-persona-custom']);
 export async function keychain(operation,account,value){
  if(!accounts.has(account))throw new Error('Unknown credential reference.');
  return await new Promise((resolveResult,reject)=>{

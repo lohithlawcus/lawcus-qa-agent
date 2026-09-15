@@ -3,6 +3,7 @@ import {randomUUID,randomBytes} from 'node:crypto';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {readSecret} from './secrets.mjs';
+import {savePersonaState} from './persona-session.mjs';
 import {sealEvidence,saveCredentials,CredentialSetup} from './setup.mjs';
 import {startEgress} from './egress.mjs';
 import {Plan} from './contracts.mjs';
@@ -252,6 +253,80 @@ export async function connectInBrowser({audit,onState,signal}){
   await saveCredentials(candidate);
   audit('setup.credential-saved','lawcus',{storage:'macOS Keychain',verifiedBy:'operator-visible-login',sameSavedAccount});
   return {status:'passed',message:'Staging login and account identity verified. The working account is saved securely.',sameSavedAccount};
+ }finally{
+  clearTimeout(timer);signal.removeEventListener('abort',cancel);candidate=null;
+  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
+ }
+}
+
+// V5 Step 12 / section 18 — the only way a persona ever becomes 'verified'.
+// A close relative of connectInBrowser() above, generalized to a named
+// persona/Keychain account instead of the one primary 'lawcus-login'
+// account, and extended to capture the resulting authenticated session
+// (encrypted via persona-session.mjs) so later runs can restore it instead
+// of signing in again every time. Same security shape as connectInBrowser:
+// no keystrokes, password filling or retries — the operator types their
+// own credentials into a real, visible Chromium window this code never
+// reads from except to confirm identity afterward.
+export async function verifyPersonaInBrowser({personas,personaId,artifactDirectory,verifiedBy,audit,onState,signal}){
+ const persona=personas.get(personaId);
+ if(!persona)throw new Error('Unknown persona.');
+ if(persona.status==='verified')throw new Error('This persona is already verified. Revoke it first to re-verify.');
+ let browser,proxy,context,candidate,timer;
+ let settle;
+ const authenticated=new Promise((resolve,reject)=>{settle={resolve,reject};});
+ authenticated.catch(()=>{});
+ const cancel=()=>{settle.reject(new Error('Visible sign-in was cancelled.'));void browser?.close().catch(()=>{});};
+ signal.addEventListener('abort',cancel,{once:true});
+ try{
+  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
+  browser=await launch(proxy,false);
+  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false});
+  context.setDefaultTimeout(20000);context.setDefaultNavigationTimeout(25000);
+  await context.routeWebSocket(/.*/,socket=>socket.close());
+  let attempts=0;
+  await context.route('**/*',async route=>{
+   const request=route.request();const url=new URL(request.url());
+   if(!permitLiveRequest(request.url(),request.method(),request.resourceType())||(request.method()==='POST'&&url.pathname!=='/login')){await route.abort('blockedbyclient');return;}
+   if(request.method()==='POST'&&url.origin===API_ORIGIN&&url.pathname==='/login'){
+    if(++attempts>1){await route.abort('blockedbyclient');return;}
+    try{const value=request.postDataJSON();candidate=CredentialSetup.parse({kind:'lawcus-persona',account:persona.credential_account,username:value.email,password:value.password});}
+    catch{await route.abort('blockedbyclient');settle.reject(new Error('The sign-in form did not submit the expected credential fields.'));return;}
+    audit('persona.visible-login-attempt',personaId,{role:persona.role});
+   }
+   await route.continue();
+  });
+  const page=await context.newPage();
+  page.on('close',cancel);browser.on('disconnected',cancel);
+  page.on('response',response=>{
+   const u=new URL(response.url());
+   if(u.origin===API_ORIGIN&&u.pathname==='/login'&&response.request().method()==='POST'){
+    if(response.status()===200)settle.resolve();
+    else settle.reject(new Error('Staging rejected this visible sign-in. No credentials were updated.'));
+   }
+  });
+  timer=setTimeout(()=>settle.reject(new Error('Visible sign-in timed out. No credentials were updated.')),180000);
+  await page.goto(STAGING+'/login',{waitUntil:'commit',timeout:45000});
+  await page.locator('input[type="password"]').waitFor({state:'visible',timeout:30000});
+  onState({status:'waiting',message:`Sign in as the ${persona.label} persona in the separate Chromium window. Nothing is saved until identity is verified.`});
+  await authenticated;
+  if(!candidate)throw new Error('No account was submitted.');
+  audit('persona.visible-authentication-accepted',personaId,{role:persona.role});
+  await page.getByPlaceholder('Search your practice',{exact:true}).waitFor({state:'visible'});
+  if(new URL(page.url()).origin!==STAGING)throw new Error('Sign-in left the authorized staging tenant.');
+  onState({status:'waiting',message:'Sign-in accepted. Open your profile menu in the top-right corner of the Chromium window so the account email can be verified.'});
+  await page.getByRole('menuitem',{name:'Logout',exact:true}).waitFor({state:'visible',timeout:90000});
+  await page.getByRole('menuitem').filter({hasText:candidate.username}).waitFor({state:'visible'});
+  if(signal.aborted)throw new Error('Visible sign-in was cancelled.');
+  // Capture the authenticated session before anything closes the context —
+  // this is what lets a later run restore state instead of signing in again.
+  const storageState=await context.storageState();
+  await savePersonaState(artifactDirectory,personaId,storageState);
+  await saveCredentials(candidate);
+  personas.markVerified(personaId,{username:candidate.username,verifiedBy});
+  personas.recordSessionCaptured(personaId);
+  audit('persona.verified',personaId,{role:persona.role,storage:'macOS Keychain + encrypted session state'});
+  return {status:'passed',message:`${persona.label} signed in, identity verified, and session saved securely.`};
  }finally{
   clearTimeout(timer);signal.removeEventListener('abort',cancel);candidate=null;
   await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
