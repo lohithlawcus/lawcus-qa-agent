@@ -46,6 +46,17 @@ jobs:
       - name: Install Chromium (for the fixture-based browser suite)
         run: npx playwright install --with-deps chromium
 
+      # server/core/runner.mjs launches Chromium with chromiumSandbox:true
+      # deliberately (real OS-level sandboxing, not weakened here or
+      # anywhere else) -- but GitHub's newer Ubuntu runner images restrict
+      # unprivileged user namespaces by default (AppArmor), which
+      # Chromium's own sandbox needs, and chromium.launch() fails
+      # immediately without this. This is GitHub's own documented runner
+      # workaround, not an app-level security downgrade:
+      # https://github.blog/changelog/2025-04-15-unprivileged-user-namespace-restrictions-in-github-actions-hosted-runners/
+      - name: Allow Chromium's sandbox to use unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Lint
         run: npm run lint
 
