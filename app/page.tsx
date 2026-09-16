@@ -37,6 +37,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from "@/components/ui/accordion";
+import {
   Select,
   SelectTrigger,
   SelectValue,
@@ -1222,41 +1228,53 @@ export default function Home() {
                   <div key={feature.id} className="testbook-feature">
                     <span className="section-label">{feature.name}</span>
                     <p className="subtle">{feature.description}</p>
-                    {feature.suites.map((suite) => (
-                      <div key={suite.id}>
-                        <h3>{suite.name}</h3>
-                        <p className="subtle">{suite.description}</p>
-                        {suite.cases.map((testCase) => (
-                          <div className="list-row" key={testCase.id}>
+                    <Accordion type="multiple">
+                      {feature.suites.map((suite) => (
+                        <AccordionItem key={suite.id} value={suite.id}>
+                          <AccordionTrigger>
                             <div>
-                              <h3>{testCase.title}</h3>
-                              <div className="inline">
-                                <Badge variant="outline">{testCase.layer}</Badge>
-                                <Badge variant="outline">{testCase.risk} risk</Badge>
-                                <Badge variant="outline">v{testCase.currentVersion}</Badge>
-                                <Badge variant="outline">{testCase.status}</Badge>
-                              </div>
+                              <h3>{suite.name}</h3>
                               <span className="subtle">
-                                {testCase.stats.executions} execution
-                                {testCase.stats.executions === 1 ? "" : "s"} ·{" "}
-                                {testCase.stats.passed} passed ·{" "}
-                                {testCase.stats.failed} failed
-                                {testCase.stats.lastExecutionAt
-                                  ? ` · last run ${date(testCase.stats.lastExecutionAt)}`
-                                  : ""}
+                                {suite.cases.length} test case
+                                {suite.cases.length === 1 ? "" : "s"}
                               </span>
                             </div>
-                            <Badge
-                              className={
-                                "status " + (testCase.stats.lastStatus || "")
-                              }
-                            >
-                              {testCase.stats.lastStatus ?? "not yet run"}
-                            </Badge>
-                          </div>
-                        ))}
-                      </div>
-                    ))}
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <p className="subtle">{suite.description}</p>
+                            {suite.cases.map((testCase) => (
+                              <div className="list-row" key={testCase.id}>
+                                <div>
+                                  <h3>{testCase.title}</h3>
+                                  <div className="inline">
+                                    <Badge variant="outline">{testCase.layer}</Badge>
+                                    <Badge variant="outline">{testCase.risk} risk</Badge>
+                                    <Badge variant="outline">v{testCase.currentVersion}</Badge>
+                                    <Badge variant="outline">{testCase.status}</Badge>
+                                  </div>
+                                  <span className="subtle">
+                                    {testCase.stats.executions} execution
+                                    {testCase.stats.executions === 1 ? "" : "s"} ·{" "}
+                                    {testCase.stats.passed} passed ·{" "}
+                                    {testCase.stats.failed} failed
+                                    {testCase.stats.lastExecutionAt
+                                      ? ` · last run ${date(testCase.stats.lastExecutionAt)}`
+                                      : ""}
+                                  </span>
+                                </div>
+                                <Badge
+                                  className={
+                                    "status " + (testCase.stats.lastStatus || "")
+                                  }
+                                >
+                                  {testCase.stats.lastStatus ?? "not yet run"}
+                                </Badge>
+                              </div>
+                            ))}
+                          </AccordionContent>
+                        </AccordionItem>
+                      ))}
+                    </Accordion>
                   </div>
                 ))
               )}
