@@ -27,7 +27,6 @@ import {
   Waypoints,
   Users,
   Video,
-  GitBranch,
   Cpu,
   Power,
 } from "lucide-react";
@@ -387,9 +386,6 @@ export default function Home() {
   const [authoringForm, setAuthoringForm] = useState({ environmentId: "fixture", featureName: "", workflowDescription: "" });
   const [activeAuthoringSession, setActiveAuthoringSession] = useState<AuthoringSession | null>(null);
   const [authoringLiveCount, setAuthoringLiveCount] = useState(0);
-  const [impactedIntent, setImpactedIntent] = useState(
-    "Update a contact custom field and check how it appears for existing/new Contact and Lead.",
-  );
   const [impactedPlan, setImpactedPlan] = useState<ImpactedPlan | null>(null);
   const [impactedResult, setImpactedResult] = useState<ImpactedRunResult | null>(null);
   const refresh = useCallback(async () => {
@@ -455,6 +451,7 @@ export default function Home() {
       });
       setPlan(p);
       setDetail(null);
+      setImpactedPlan(null);
       await refresh();
     });
   }
@@ -465,23 +462,45 @@ export default function Home() {
         idempotencyKey: crypto.randomUUID(),
       });
       setDetail(await request<Detail>("/runs/" + run.id));
-      setTab("workspace");
       await refresh();
-    });
-  }
-  async function planImpacted() {
-    await action(async () => {
-      setImpactedResult(null);
-      setImpactedPlan(await request<ImpactedPlan>("/impacted-tests/plan", { intent: impactedIntent }));
     });
   }
   async function runImpacted() {
     await action(async () => {
-      const result = await request<ImpactedRunResult>("/impacted-tests/run", { intent: impactedIntent });
+      const result = await request<ImpactedRunResult>("/impacted-tests/run", { intent });
       setImpactedResult(result);
       setImpactedPlan(result.plan);
       await refresh();
     });
+  }
+  // One box, one action: try what's already proven and coverage-aware
+  // first — the Impact Graph pattern match, zero AI, real feature reach —
+  // and only fall through to the login planner (local intent match, then
+  // a bounded AI call as a last resort) when that doesn't recognize the
+  // prompt. Impacted-testing cases are staging-only, so skip straight to
+  // the login planner for the local fixture environment.
+  async function buildPlan() {
+    await action(async () => {
+      setPlan(null);
+      setDetail(null);
+      setImpactedPlan(null);
+      setImpactedResult(null);
+      if (environment === "lawcus") {
+        const ip = await request<ImpactedPlan>("/impacted-tests/plan", { intent });
+        if (ip.matched) {
+          setImpactedPlan(ip);
+          await refresh();
+          return;
+        }
+      }
+      const p = await request<Plan>("/plans", { intent, planner: "ai", environmentId: environment });
+      setPlan(p);
+      await refresh();
+    });
+  }
+  async function runPlan() {
+    if (impactedPlan?.matched) await runImpacted();
+    else if (plan) await runTest(plan.id);
   }
   async function toggleAiGate(enabled: boolean) {
     await action(async () => {
@@ -493,6 +512,7 @@ export default function Home() {
     await action(async () => {
       setDetail(await request<Detail>("/runs/" + id));
       setPlan(null);
+      setImpactedPlan(null);
       setTab("workspace");
     });
   }
@@ -713,8 +733,9 @@ export default function Home() {
           <span className="local-label">
             <LockKeyhole size={13} /> Local development
           </span>
+          <span className="operator-name">Lohith Reddy</span>
           <div className="avatar" aria-label="Local operator">
-            QA
+            LR
           </div>
         </div>
       </header>
@@ -723,15 +744,11 @@ export default function Home() {
           <TabsList variant="line" className="top-nav">
             <TabsTrigger value="workspace">
               <Terminal />
-              Test workspace
+              Test
             </TabsTrigger>
             <TabsTrigger value="testbook">
               <ListChecks />
               TestBook
-            </TabsTrigger>
-            <TabsTrigger value="impacted">
-              <GitBranch />
-              Impacted Testing
             </TabsTrigger>
             <TabsTrigger value="ai-usage">
               <Cpu />
@@ -785,12 +802,10 @@ export default function Home() {
               <div className="eyebrow">YOUR QA WORKSPACE</div>
               <h1>
                 {tab === "workspace"
-                  ? "What would you like to test?"
+                  ? "Ask in plain English. Get a clear plan. Run what's proven."
                   : tab === "testbook"
                     ? "The record of what's actually proven"
-                    : tab === "impacted"
-                      ? "Ask in plain English. See what's already proven, and what isn't."
-                      : tab === "ai-usage"
+                    : tab === "ai-usage"
                         ? "Known work costs zero model calls"
                         : tab === "history"
                         ? "Every run, accounted for"
@@ -810,12 +825,10 @@ export default function Home() {
               </h1>
               <p>
                 {tab === "workspace"
-                  ? "Describe the intent. Review the checks. Let the runner handle the steps."
+                  ? "One box for everything you can test — login, Contacts, Leads, and what they affect downstream."
                   : tab === "testbook"
                     ? "Feature → suite → test case, each on a versioned definition, with its real execution history."
-                    : tab === "impacted"
-                      ? "Local intent → Impact Graph → approved Knowledge → TestBook coverage → gap detection. No AI call unless a gap needs one proposed."
-                      : tab === "ai-usage"
+                    : tab === "ai-usage"
                         ? "Every model call is logged, permitted only by policy, and never the normal way this system runs."
                         : tab === "history"
                         ? "Results and evidence are retained, including failed and interrupted runs."
@@ -865,7 +878,7 @@ export default function Home() {
                     </span>
                     <Badge variant="outline">
                       {environment === "lawcus"
-                        ? "OpenAI login planner"
+                        ? "Local-first · AI-assisted fallback"
                         : "Built-in login planner"}
                     </Badge>
                   </div>
@@ -886,6 +899,7 @@ export default function Home() {
                       onValueChange={(v) => {
                         setEnvironment(v);
                         setPlan(null);
+                        setImpactedPlan(null);
                       }}
                     >
                       <SelectTrigger
@@ -907,28 +921,30 @@ export default function Home() {
                     <Button
                       className="primary-button"
                       disabled={!intent.trim() || busy || !state}
-                      onClick={() => planTest()}
+                      onClick={() => buildPlan()}
                     >
                       {busy ? (
                         <LoaderCircle className="spin" />
                       ) : (
                         <ArrowUpRight />
                       )}
-                      Create test plan
+                      Build plan
                     </Button>
                   </div>
                 </div>
                 {environment === "lawcus" && <div className="try-row"><Button variant="outline" disabled={busy || !state} onClick={() => planTest("standard")}>Use standard login checks</Button><span>Four fixed checks · No API key needed · Review before running</span></div>}
                 <div className="try-row">
-                  <span>Try a login request</span>
-                  {["Test the login page.", "Thoroughly test login."].map(
-                    (text) => (
-                      <button key={text} onClick={() => setIntent(text)}>
-                        {text}
-                        <ChevronRight size={13} />
-                      </button>
-                    ),
-                  )}
+                  <span>Try a request</span>
+                  {[
+                    "Test the login page.",
+                    "Update a contact custom field and check how it appears for existing/new Contact and Lead.",
+                    "Thoroughly test login.",
+                  ].map((text) => (
+                    <button key={text} onClick={() => setIntent(text)}>
+                      {text}
+                      <ChevronRight size={13} />
+                    </button>
+                  ))}
                 </div>
                 {detail ? (
                   <div className="panel result-panel">
@@ -1071,6 +1087,79 @@ export default function Home() {
                       </Button>
                     )}
                   </div>
+                ) : impactedPlan?.matched ? (
+                  <div className="panel">
+                    <div className="panel-heading">
+                      <div>
+                        <span className="section-label">READY FOR REVIEW</span>
+                        <h2>{impactedPlan.subjectFeatureName} impact</h2>
+                      </div>
+                      <Badge variant="outline">
+                        {impactedPlan.cells.length} checks
+                      </Badge>
+                    </div>
+                    <p className="subtle">
+                      Recognized locally — matched to approved coverage across
+                      the Impact Graph, without an AI call.
+                    </p>
+                    <div className="inline">
+                      {impactedPlan.features.map((f) => (
+                        <Badge key={f} variant="outline">
+                          {f}
+                        </Badge>
+                      ))}
+                    </div>
+                    <div className="scenario-list">
+                      {impactedPlan.cells.map((cell) => {
+                        const executed = impactedResult?.results.find(
+                          (r) => r.externalId === cell.externalId,
+                        );
+                        return (
+                          <div className="list-row" key={cell.externalId}>
+                            <div>
+                              <h3>
+                                {cell.featureName} — {cell.recordState} record
+                              </h3>
+                              <p className="subtle">{cell.externalId}</p>
+                              {executed?.actual && (
+                                <p className="small-note">{executed.actual}</p>
+                              )}
+                            </div>
+                            <Badge
+                              className={executed ? "status " + executed.status : ""}
+                              variant="outline"
+                            >
+                              {executed
+                                ? executed.status
+                                : cell.covered
+                                  ? "proven"
+                                  : "needs review"}
+                            </Badge>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {impactedResult && impactedResult.filedProposals.length > 0 && (
+                      <p className="subtle">
+                        {impactedResult.filedProposals.length} NEW_TEST
+                        proposal(s) filed for review in the Proposals tab —
+                        nothing runs for an unapproved cell.
+                      </p>
+                    )}
+                    <div className="plan-bottom">
+                      <span>
+                        <LockKeyhole size={14} /> Dedicated staging account
+                      </span>
+                      <Button
+                        className="primary-button"
+                        disabled={busy || running}
+                        onClick={() => runPlan()}
+                      >
+                        <Play />
+                        Run {impactedPlan.cells.length} checks
+                      </Button>
+                    </div>
+                  </div>
                 ) : plan ? (
                   <div className="panel">
                     <div className="panel-heading">
@@ -1127,9 +1216,10 @@ export default function Home() {
                     </div>
                     <h2>A clear plan before the first click</h2>
                     <p>
-                      Your request becomes readable checks, then repeatable
-                      browser steps. Start with the login page to verify the
-                      complete workflow.
+                      Your request becomes readable checks against what&apos;s
+                      already proven, then repeatable browser steps. Try the
+                      login page, or ask what a Contacts or Leads change
+                      affects.
                     </p>
                     <div className="flow-line">
                       <span>
@@ -1152,9 +1242,9 @@ export default function Home() {
                   <div className="scope-icon">
                     <ShieldCheck size={22} />
                   </div>
-                  <h2>Bounded login testing</h2>
+                  <h2>Coverage-aware testing</h2>
                   <p>
-                    {environment === "lawcus" ? "Test the dedicated staging account with fixed checks or an AI-selected login plan." : "Test the QA platform against its local synthetic application."}
+                    {environment === "lawcus" ? "Checks real coverage across features first, then falls back to a bounded, login-only AI plan when nothing local matches." : "Test the QA platform against its local synthetic application."}
                   </p>
                   <ul>
                     <li>
@@ -1277,81 +1367,6 @@ export default function Home() {
                     </Accordion>
                   </div>
                 ))
-              )}
-            </div>
-          </TabsContent>
-          <TabsContent value="impacted">
-            <div className="panel">
-              <span className="section-label">ASK IN PLAIN ENGLISH</span>
-              <Textarea
-                value={impactedIntent}
-                onChange={(e) => setImpactedIntent(e.target.value)}
-                maxLength={1000}
-                placeholder="Update a contact custom field and check how it appears for existing/new Contact and Lead."
-              />
-              <div className="inline">
-                <Button variant="outline" disabled={busy} onClick={planImpacted}>
-                  <GitBranch />
-                  Check coverage
-                </Button>
-                <Button disabled={busy} onClick={runImpacted}>
-                  <Play />
-                  Run real checks
-                </Button>
-              </div>
-              {impactedPlan && !impactedPlan.matched && (
-                <p className="subtle">
-                  Not recognized locally yet — this exact prompt isn&apos;t one
-                  of the patterns this project knows how to route without a
-                  human teaching it a new one first.
-                </p>
-              )}
-              {impactedPlan && impactedPlan.matched && (
-                <>
-                  <p className="subtle">
-                    Subject: {impactedPlan.subjectFeatureName} · Impact Graph
-                    reached: {impactedPlan.features.join(", ")}
-                  </p>
-                  <p className="subtle">
-                    {impactedPlan.knowledgeItems.length} approved Knowledge
-                    item(s) relevant.
-                  </p>
-                  {impactedPlan.cells.map((cell) => {
-                    const executed = impactedResult?.results.find(
-                      (r) => r.externalId === cell.externalId,
-                    );
-                    return (
-                      <div className="list-row" key={cell.externalId}>
-                        <div>
-                          <h3>
-                            {cell.featureName} — {cell.recordState} record
-                          </h3>
-                          <p className="subtle">{cell.externalId}</p>
-                          {executed?.actual && (
-                            <p className="small-note">{executed.actual}</p>
-                          )}
-                        </div>
-                        <Badge
-                          className={executed ? "status " + executed.status : ""}
-                          variant="outline"
-                        >
-                          {executed
-                            ? executed.status
-                            : cell.covered
-                              ? "covered"
-                              : "gap"}
-                        </Badge>
-                      </div>
-                    );
-                  })}
-                  {impactedResult && impactedResult.filedProposals.length > 0 && (
-                    <p className="subtle">
-                      {impactedResult.filedProposals.length} NEW_TEST
-                      proposal(s) filed for review in the Proposals tab —
-                      nothing runs for an unapproved cell.
-                    </p>
-                  )}
-                </>
               )}
             </div>
           </TabsContent>

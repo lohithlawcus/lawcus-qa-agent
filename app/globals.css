@@ -226,6 +226,11 @@ a {
   align-items: center;
   gap: 7px;
 }
+.operator-name {
+  font-size: 13px;
+  color: #e7edf3;
+  font-weight: 500;
+}
 .avatar {
   width: 32px;
   height: 32px;
@@ -929,6 +934,9 @@ footer {
     margin-left: 8px;
   }
   .local-label {
+    display: none;
+  }
+  .operator-name {
     display: none;
   }
   .nav-wrap {
