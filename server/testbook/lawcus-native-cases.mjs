@@ -6,6 +6,7 @@ import {
   runContactCompanyMandatoryFieldValidationCheck,
   runLeadCustomFieldCheck,
   runLeadCreationCheck,
+  runLeadMandatoryFieldValidationCheck,
 } from "../core/live-runner.mjs";
 
 // V5 Step 16 — registers Step 15's already-built, already-live-verified
@@ -150,23 +151,19 @@ export const UPDATE_CONTACT_COMPANY_CASES = {
 
 export const CONTACTS_NATIVE_CASES = { ...CREATE_CONTACT_CASES, ...CREATE_CONTACT_COMPANY_CASES, ...UPDATE_CONTACT_CASES, ...UPDATE_CONTACT_COMPANY_CASES };
 
-export const LEADS_NATIVE_CASES = {
-  "leads.custom_field_update_existing": {
-    source: nativeSource({
-      kind: "native",
-      module: "server/core/live-runner.mjs",
-      function: "runLeadCustomFieldCheck",
-      description:
-        "Real browser-driven update-and-restore of an existing Lead's matter-level custom field value, correlated against the approved lawcus.leads.update contract. Live-verified in Step 15 (commit 95d3a47).",
-    }),
-    definition: {
-      id: "leads.custom_field_update_existing",
-      name: "Update an existing Lead's custom field and restore it",
-      layer: "both",
-      risk: "normal",
-      status: "approved",
-    },
-  },
+// V5 "Keep going with Leads" (2026-09-16) — same action-x-type
+// organization as Contacts. Real exploration (2026-09-16) confirmed the
+// New Lead wizard's Step 1 ("Add potential client") offers the identical
+// Person/Company choice as plain Contacts, PLUS a third "Existing
+// Contact" option (link the lead to an already-existing contact instead
+// of creating a new one) — not yet covered by any case here, a real gap
+// noted for later, not fabricated coverage. Only the Person side is built
+// out so far; Create Lead - Company and the "Existing Contact" case are
+// still open (real staging login attempts started failing intermittently
+// mid-exploration, 2026-09-16 — see the project memory note on staging
+// throttling — so Company-type Step 1/Step 2 fields weren't yet
+// confirmed live).
+export const CREATE_LEAD_CASES = {
   "leads.create_new_verifies_custom_fields": {
     source: nativeSource({
       kind: "native",
@@ -183,7 +180,44 @@ export const LEADS_NATIVE_CASES = {
       status: "approved",
     },
   },
+  "leads.create_mandatory_field_validation": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runLeadMandatoryFieldValidationCheck",
+      description:
+        "Real browser-driven check that the New Lead wizard's Step 1 required fields (First Name, Last Name) show Lawcus's own inline validation and block advancing to Step 2 when left empty. Directly observed against real staging before being written (2026-09-16): both fields show \"This field is required and cannot be empty.\", Step 1 stays open, and no lead is created.",
+    }),
+    definition: {
+      id: "leads.create_mandatory_field_validation",
+      name: "Required-field validation blocks an empty Lead",
+      layer: "ui",
+      risk: "normal",
+      status: "approved",
+    },
+  },
 };
+
+export const UPDATE_LEAD_CASES = {
+  "leads.custom_field_update_existing": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runLeadCustomFieldCheck",
+      description:
+        "Real browser-driven update-and-restore of an existing Lead's matter-level custom field value, correlated against the approved lawcus.leads.update contract. Live-verified in Step 15 (commit 95d3a47).",
+    }),
+    definition: {
+      id: "leads.custom_field_update_existing",
+      name: "Update an existing Lead's custom field and restore it",
+      layer: "both",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+};
+
+export const LEADS_NATIVE_CASES = { ...CREATE_LEAD_CASES, ...UPDATE_LEAD_CASES };
 
 // Suite -> the externalIds it contains, for callers (Step 18's MCP
 // run_approved_suite tool) that need "everything in this suite" without
@@ -193,7 +227,8 @@ export const NATIVE_SUITE_MEMBERS = {
   "Create Contact - Company": Object.keys(CREATE_CONTACT_COMPANY_CASES),
   "Update Contact - Person": Object.keys(UPDATE_CONTACT_CASES),
   "Update Contact - Company": Object.keys(UPDATE_CONTACT_COMPANY_CASES),
-  "lead-verification": Object.keys(LEADS_NATIVE_CASES),
+  "Create Lead - Person": Object.keys(CREATE_LEAD_CASES),
+  "Update Lead": Object.keys(UPDATE_LEAD_CASES),
 };
 
 // Real, owned staging fixtures from Step 15's own live-verified work (see
@@ -248,6 +283,10 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
       const r = await runLeadCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts + 1), matterName: `QA Agent - ${ts + 1}` });
       return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
     },
+    "leads.create_mandatory_field_validation": async () => {
+      const r = await runLeadMandatoryFieldValidationCheck();
+      return { passed: r.messageCount === 2 && r.stayedOnStep1 && r.noLeadCreated, actual: JSON.stringify(r) };
+    },
   };
 }
 
@@ -290,9 +329,17 @@ export function seedLawcusNativeCases(testbook) {
   testbook.syncCases({
     featureName: "Leads",
     featureDescription: "Potential clients tracked through an intake pipeline until converted to a matter or marked not hired.",
-    suiteName: "lead-verification",
-    suiteDescription: "Real, browser-driven Lead checks (custom field update/restore, new-Lead creation) built in Step 15.",
+    suiteName: "Create Lead - Person",
+    suiteDescription: "Real, browser-driven checks of the New Lead wizard's Step 1, Person type — creation and its own field validation.",
     priority: "normal",
-    entries: LEADS_NATIVE_CASES,
+    entries: CREATE_LEAD_CASES,
+  });
+  testbook.syncCases({
+    featureName: "Leads",
+    featureDescription: "Potential clients tracked through an intake pipeline until converted to a matter or marked not hired.",
+    suiteName: "Update Lead",
+    suiteDescription: "Real, browser-driven checks of editing an existing Lead's matter-level custom fields.",
+    priority: "normal",
+    entries: UPDATE_LEAD_CASES,
   });
 }

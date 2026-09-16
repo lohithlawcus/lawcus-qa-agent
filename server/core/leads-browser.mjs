@@ -52,6 +52,25 @@ function fieldValueInput(page, fieldName) {
   return page.locator(`text=${fieldName}`).locator("..").locator('input[type="text"]').first();
 }
 
+/** Opens the New Lead wizard's Step 1 (Add potential client) from the
+ * Leads list — shared by every create/validate case below. Real, observed
+ * 2026-09-16: Step 1 defaults to Person, and also offers Company and
+ * Existing Contact as potential-client types (same three-way choice as
+ * plain Contacts' Person/Company, plus a lead-specific "link to an
+ * existing contact" option — not yet covered by any case here). */
+async function openNewLeadDialog(page) {
+  await page.goto(STAGING + "/dashboard", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1500);
+  await page.locator("text=Leads").first().click();
+  await page.waitForTimeout(1500);
+  await page.getByText("New Lead", { exact: false }).first().click().catch(async () => {
+    await page.getByRole("button", { name: /new/i }).first().click();
+    await page.waitForTimeout(500);
+    await page.getByText("New Lead", { exact: false }).first().click();
+  });
+  await page.waitForTimeout(1500);
+}
+
 /**
  * Creates a brand-new Lead (Person "Potential Client" + its Matter) through
  * the real "New Lead" two-step wizard and returns its real uuid,
@@ -64,16 +83,7 @@ export async function createLeadViaBrowser({ context, apiContracts, firstName, l
   const observer = attachNetworkObserver(context);
   const page = await context.newPage();
   try {
-    await page.goto(STAGING + "/dashboard", { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1500);
-    await page.locator("text=Leads").first().click();
-    await page.waitForTimeout(1500);
-    await page.getByText("New Lead", { exact: false }).first().click().catch(async () => {
-      await page.getByRole("button", { name: /new/i }).first().click();
-      await page.waitForTimeout(500);
-      await page.getByText("New Lead", { exact: false }).first().click();
-    });
-    await page.waitForTimeout(1500);
+    await openNewLeadDialog(page);
     await page.locator('input[name="firstName"], input[placeholder*="First"]').first().fill(firstName);
     await page.locator('input[name="lastName"], input[placeholder*="Last"]').first().fill(lastName);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -111,6 +121,33 @@ export async function createLeadViaBrowser({ context, apiContracts, firstName, l
     return { uuid: match[1], correlation, events: observer.events };
   } finally {
     observer.dispose();
+    await page.close().catch(() => {});
+  }
+}
+
+/**
+ * Opens the New Lead wizard's Step 1 and clicks Continue with every field
+ * left empty — a real, observed check (2026-09-16 exploration, same
+ * pattern as contacts-browser.mjs's Person validation) that the two
+ * required fields (First Name, Last Name) show Lawcus's own inline
+ * validation and that Step 1 never advances to Step 2 (so no lead is
+ * created). Never fills anything, never saves.
+ */
+const REQUIRED_FIELD_MESSAGE = "This field is required and cannot be empty.";
+
+export async function verifyLeadMandatoryFieldValidationViaBrowser({ context }) {
+  const page = await context.newPage();
+  try {
+    await openNewLeadDialog(page);
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.waitForTimeout(1000);
+
+    const messageCount = await page.getByText(REQUIRED_FIELD_MESSAGE, { exact: true }).count();
+    const stayedOnStep1 = await page.getByText("Add potential client (Step 1/2)", { exact: false }).first().isVisible().catch(() => false);
+    const noLeadCreated = !/\/lead\/[a-f0-9-]{36}/.test(page.url());
+
+    return { messageCount, stayedOnStep1, noLeadCreated };
+  } finally {
     await page.close().catch(() => {});
   }
 }
