@@ -129,7 +129,26 @@ export const UPDATE_CONTACT_CASES = {
   },
 };
 
-export const CONTACTS_NATIVE_CASES = { ...CREATE_CONTACT_CASES, ...CREATE_CONTACT_COMPANY_CASES, ...UPDATE_CONTACT_CASES };
+export const UPDATE_CONTACT_COMPANY_CASES = {
+  "contacts.custom_field_update_existing_company": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runContactCustomFieldCheck",
+      description:
+        "Real browser-driven update-and-restore of an existing Company Contact's custom field value, correlated against the approved lawcus.contacts.update contract. Reuses the same function as the Person suite's equivalent case — the Edit Contact > Custom Fields panel is the same real UI for both contact types — pointed at a known Company contact instead. Live-verified 2026-09-16.",
+    }),
+    definition: {
+      id: "contacts.custom_field_update_existing_company",
+      name: "Update an existing Company Contact's custom field and restore it",
+      layer: "both",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+};
+
+export const CONTACTS_NATIVE_CASES = { ...CREATE_CONTACT_CASES, ...CREATE_CONTACT_COMPANY_CASES, ...UPDATE_CONTACT_CASES, ...UPDATE_CONTACT_COMPANY_CASES };
 
 export const LEADS_NATIVE_CASES = {
   "leads.custom_field_update_existing": {
@@ -173,6 +192,7 @@ export const NATIVE_SUITE_MEMBERS = {
   "Create Contact - Person": Object.keys(CREATE_CONTACT_CASES),
   "Create Contact - Company": Object.keys(CREATE_CONTACT_COMPANY_CASES),
   "Update Contact - Person": Object.keys(UPDATE_CONTACT_CASES),
+  "Update Contact - Company": Object.keys(UPDATE_CONTACT_COMPANY_CASES),
   "lead-verification": Object.keys(LEADS_NATIVE_CASES),
 };
 
@@ -180,6 +200,10 @@ export const NATIVE_SUITE_MEMBERS = {
 // the project memory note on those commits) — not invented here, and
 // never used for any case this project doesn't already know how to run.
 const KNOWN_CONTACT_UUID = "e2bf71a0-ae87-11f1-ab8e-f18331cbd381"; // "QA Batch Test"
+// Created 2026-09-16 by the very first live run of
+// contacts.create_new_company_verifies_custom_fields (Create Contact -
+// Company suite) — a real Company contact, not invented for this purpose.
+const KNOWN_CONTACT_COMPANY_UUID = "9f1c75c0-b1d0-11f1-8594-1376676d24eb"; // "QA Agent - <timestamp>" (Company)
 const KNOWN_LEAD_UUID = "c59e9ec0-b115-11f1-b4fe-1feb32eda16d"; // "QA Agent - 1789484203935"
 
 /**
@@ -211,6 +235,10 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
     "contacts.create_company_mandatory_field_validation": async () => {
       const r = await runContactCompanyMandatoryFieldValidationCheck();
       return { passed: r.messageCount === 1 && r.noContactCreated, actual: JSON.stringify(r) };
+    },
+    "contacts.custom_field_update_existing_company": async () => {
+      const r = await runContactCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_CONTACT_COMPANY_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
+      return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
     },
     "leads.custom_field_update_existing": async () => {
       const r = await runLeadCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_LEAD_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
@@ -250,6 +278,14 @@ export function seedLawcusNativeCases(testbook) {
     suiteDescription: "Real, browser-driven checks of editing an existing Person Contact.",
     priority: "normal",
     entries: UPDATE_CONTACT_CASES,
+  });
+  testbook.syncCases({
+    featureName: "Contacts",
+    featureDescription: "People and companies stored in Lawcus — clients, potential clients, and other contacts.",
+    suiteName: "Update Contact - Company",
+    suiteDescription: "Real, browser-driven checks of editing an existing Company Contact.",
+    priority: "normal",
+    entries: UPDATE_CONTACT_COMPANY_CASES,
   });
   testbook.syncCases({
     featureName: "Leads",
