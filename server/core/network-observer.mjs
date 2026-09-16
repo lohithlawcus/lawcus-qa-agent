@@ -35,6 +35,18 @@ export function pathMatchesTemplate(pathname, template) {
 export function attachNetworkObserver(context) {
   const events = [];
   const consoleEntries = [];
+  // A real race, not a hypothetical one — found live while diagnosing a
+  // genuine correlateObservation failure (Contacts, Company-type creation,
+  // 2026-09-16): responseBody is filled in by an async response.json()
+  // that isn't awaited by anything, so a caller correlating immediately
+  // after its own action's navigation/wait resolves can beat it — the
+  // observed entry still has responseBody:null even though the real
+  // response had a real JSON body. This most plausibly explains this
+  // project's pre-existing intermittent create-Contact contractMatch:false
+  // failures (TestBook showed 3 of 7 executions failing this way before
+  // this fix). Every pending body-read promise is tracked here so a
+  // caller can await settle() before correlating.
+  const pendingBodies = [];
 
   // Pushed synchronously on the 'response' event itself, so cardinality
   // counting can never race a correlation check that runs moments later —
@@ -60,12 +72,14 @@ export function attachNetworkObserver(context) {
     events.push(entry);
     const contentType = response.headers()["content-type"] || "";
     if (contentType.includes("json"))
-      response
-        .json()
-        .then((body) => {
-          entry.responseBody = body;
-        })
-        .catch(() => {});
+      pendingBodies.push(
+        response
+          .json()
+          .then((body) => {
+            entry.responseBody = body;
+          })
+          .catch(() => {}),
+      );
   };
   const onConsole = (message) => {
     if (message.type() !== "error" || consoleEntries.length >= MAX_CONSOLE_ENTRIES) return;
@@ -89,6 +103,14 @@ export function attachNetworkObserver(context) {
   return {
     events,
     consoleEntries,
+    /** Waits for every JSON response body captured so far to finish being
+     * read. Callers must await this before correlateObservation() whenever
+     * the contract's response shape matters — otherwise a fast-resolving
+     * action can race the (unrelated) response.json() promise and observe
+     * responseBody:null for a real, present body. */
+    async settle() {
+      await Promise.all(pendingBodies);
+    },
     dispose() {
       context.off("response", onResponse);
       context.off("console", onConsole);

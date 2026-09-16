@@ -91,6 +91,9 @@ export async function createLeadViaBrowser({ context, apiContracts, firstName, l
     // elapsed, not a login timeout). Actively wait for the real
     // detail-page URL pattern instead of guessing a fixed delay.
     await page.waitForURL(/\/lead\/[a-f0-9-]{36}/, { timeout: 15000 }).catch(() => {});
+    // Real response-body race, same as Contacts — see
+    // network-observer.mjs's attachNetworkObserver / settle() comment.
+    await observer.settle();
 
     const contract = apiContracts.resolveApprovedContract("lawcus.leads.create");
     const correlation = correlateObservation({
@@ -150,6 +153,7 @@ export async function updateLeadCustomFieldViaBrowser({ context, apiContracts, u
     await valueInput.fill(newValue);
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await page.waitForTimeout(2500);
+    await observer.settle();
 
     const contract = apiContracts.resolveApprovedContract("lawcus.leads.update");
     const correlation = correlateObservation({

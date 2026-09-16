@@ -102,6 +102,12 @@ export async function createContactViaBrowser({ context, apiContracts, firstName
     // guessing a fixed delay; .catch() lets a genuine failure still reach
     // the clear error below rather than surfacing waitForURL's own.
     await page.waitForURL(/\/contact\/[a-f0-9-]{36}/, { timeout: 15000 }).catch(() => {});
+    // Real race, found live 2026-09-16 (see attachNetworkObserver's own
+    // comment): the create response's JSON body is read asynchronously and
+    // isn't otherwise awaited anywhere — correlating immediately after the
+    // URL wait above can observe responseBody:null for a response that
+    // really did have a body.
+    await observer.settle();
 
     const contract = apiContracts.resolveApprovedContract("lawcus.contacts.create");
     const correlation = correlateObservation({
@@ -143,6 +149,10 @@ export async function createCompanyContactViaBrowser({ context, apiContracts, na
     // Same real post-save navigation race as Person creation — see
     // createContactViaBrowser's comment above for the evidence.
     await page.waitForURL(/\/contact\/[a-f0-9-]{36}/, { timeout: 15000 }).catch(() => {});
+    // Same real response-body race as Person creation — see
+    // createContactViaBrowser's comment above; this is in fact the exact
+    // call where the race was first caught live (2026-09-16).
+    await observer.settle();
 
     const contract = apiContracts.resolveApprovedContract("lawcus.contacts.create");
     const correlation = correlateObservation({
@@ -252,6 +262,7 @@ export async function updateContactCustomFieldViaBrowser({ context, apiContracts
     await valueInput.fill(newValue);
     await page.getByRole("button", { name: "Update", exact: true }).click();
     await page.waitForTimeout(2500);
+    await observer.settle();
 
     const contract = apiContracts.resolveApprovedContract("lawcus.contacts.update");
     const correlation = correlateObservation({

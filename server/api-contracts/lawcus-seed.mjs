@@ -161,8 +161,19 @@ export const CONTACTS_CONTRACTS = [
       required: ["type", "first_name", "last_name", "name", "custom_fields"],
       properties: {
         type: { type: "string" },
-        first_name: { type: "string" },
-        last_name: { type: "string" },
+        // v1 (approved 2026-09-15) required these as non-null strings,
+        // observed from Person-only creation. Real Company-type creation
+        // (observed 2026-09-16, building the Create Contact - Company
+        // suite) legitimately sends both as null and uses `name` instead —
+        // that's not a bug, it's what a Company contact actually is.
+        // Widened rather than made Person-only-strict + conditional: this
+        // project's shape validator (schema-shape.mjs) is deliberately
+        // minimal and doesn't support discriminated/conditional schemas,
+        // and a validator that can't express "required unless type is
+        // company" honestly should say "string or null", not silently
+        // over-claim non-null.
+        first_name: { type: "string", nullable: true },
+        last_name: { type: "string", nullable: true },
         name: { type: "string" },
         custom_fields: {
           type: "array",
@@ -183,8 +194,9 @@ export const CONTACTS_CONTRACTS = [
         type: "object",
         required: ["first_name", "last_name", "name", "custom_fields"],
         properties: {
-          first_name: { type: "string" },
-          last_name: { type: "string" },
+          // Same real Company-type nullability as the request above.
+          first_name: { type: "string", nullable: true },
+          last_name: { type: "string", nullable: true },
           name: { type: "string" },
           custom_fields: { type: "string" },
         },

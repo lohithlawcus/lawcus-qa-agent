@@ -179,6 +179,11 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
     audit('clarification.opened',questionId,{runId,scenario});
    }
    observer?.dispose();
+   // Real response-body race, same root cause as contacts-browser.mjs's
+   // (see network-observer.mjs's settle() comment) — dispose() above only
+   // stops listening for new responses, it doesn't wait for in-flight
+   // body reads, so this must still happen before correlating below.
+   await observer?.settle();
    // Correlation is computed here (it can still affect status/actual before
    // scenario_results is written), but network_observations itself is only
    // written further below, AFTER that row exists — it carries a foreign
