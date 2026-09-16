@@ -15,7 +15,7 @@ import {STAGING,API_ORIGIN,ASSETS} from './environment-adapter.mjs';
 export {STAGING,API_ORIGIN,ASSETS};
 import {attachNetworkObserver,correlateObservation} from './network-observer.mjs';
 import {attachRecorder} from './recorder.mjs';
-import {updateAndRestoreContactCustomFieldViaBrowser,createContactViaBrowser,verifyMandatoryFieldValidationViaBrowser,VIEWPORT as CONTACTS_VIEWPORT} from './contacts-browser.mjs';
+import {updateAndRestoreContactCustomFieldViaBrowser,createContactViaBrowser,createCompanyContactViaBrowser,verifyMandatoryFieldValidationViaBrowser,verifyMandatoryFieldValidationCompanyViaBrowser,VIEWPORT as CONTACTS_VIEWPORT} from './contacts-browser.mjs';
 import {updateAndRestoreLeadCustomFieldViaBrowser,createLeadViaBrowser,VIEWPORT as LEADS_VIEWPORT} from './leads-browser.mjs';
 import {ApiContractError} from './api-contracts.mjs';
 // V5 Step 11 / section 23 — which real API request each login scenario is
@@ -543,6 +543,62 @@ export async function runContactMandatoryFieldValidationCheck(){
   await assertIdentity(page,creds.username);
   await page.close();
   return await verifyMandatoryFieldValidationViaBrowser({context});
+ }finally{
+  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
+ }
+}
+
+// V5 "Start with Contacts" (2026-09-16) — Create Contact - Company suite,
+// the Company-type counterpart to runContactCreationCheck. Same
+// login/permit/close discipline; hands off to contacts-browser.mjs's
+// createCompanyContactViaBrowser.
+export async function runContactCompanyCreationCheck({apiContracts,name}){
+ let browser,proxy,context;
+ try{
+  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
+  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
+  browser=await launch(proxy);
+  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
+  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
+  await context.routeWebSocket(/.*/,socket=>socket.close());
+  await context.route('**/*',async route=>{
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   await route.continue();
+  });
+  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
+  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
+  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
+  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
+  await assertIdentity(page,creds.username);
+  await page.close();
+  return await createCompanyContactViaBrowser({context,apiContracts,name});
+ }finally{
+  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
+ }
+}
+
+// V5 "Start with Contacts" (2026-09-16) — Create Contact - Company suite,
+// the Company-type counterpart to runContactMandatoryFieldValidationCheck.
+export async function runContactCompanyMandatoryFieldValidationCheck(){
+ let browser,proxy,context;
+ try{
+  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
+  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
+  browser=await launch(proxy);
+  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
+  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
+  await context.routeWebSocket(/.*/,socket=>socket.close());
+  await context.route('**/*',async route=>{
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   await route.continue();
+  });
+  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
+  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
+  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
+  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
+  await assertIdentity(page,creds.username);
+  await page.close();
+  return await verifyMandatoryFieldValidationCompanyViaBrowser({context});
  }finally{
   await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
  }

@@ -2,6 +2,8 @@ import {
   runContactCustomFieldCheck,
   runContactCreationCheck,
   runContactMandatoryFieldValidationCheck,
+  runContactCompanyCreationCheck,
+  runContactCompanyMandatoryFieldValidationCheck,
   runLeadCustomFieldCheck,
   runLeadCreationCheck,
 } from "../core/live-runner.mjs";
@@ -28,11 +30,16 @@ import {
 const nativeSource = (obj) => JSON.stringify(obj, null, 2);
 
 // V5 "Start with Contacts" (2026-09-16) — the Contacts feature is now
-// organized into the suites the user actually asked for (Create Contact,
-// Update Contact), not one flat "contact-verification" bucket. Each suite
-// is its own object so seedLawcusNativeCases can sync them under distinct
-// suite names; CONTACTS_NATIVE_CASES below stays the merged view existing
-// callers (buildNativeRunners, the native-cases tests) already rely on.
+// organized into the suites the user actually asked for: one sub-suite
+// per action x contact-type combination (Create Contact - Person, Create
+// Contact - Company, Update Contact - Person, Update Contact - Company),
+// not one flat "contact-verification" bucket. This same action-x-type
+// pattern is meant to repeat for every other feature (Matters, Invoices,
+// Leads, ...) as their own suites get built out — not special-cased to
+// Contacts. Each case group below is its own object so
+// seedLawcusNativeCases can sync it under its own suite name;
+// CONTACTS_NATIVE_CASES stays the merged view existing callers
+// (buildNativeRunners, the native-cases tests) already rely on.
 export const CREATE_CONTACT_CASES = {
   "contacts.create_new_verifies_custom_fields": {
     source: nativeSource({
@@ -68,6 +75,41 @@ export const CREATE_CONTACT_CASES = {
   },
 };
 
+export const CREATE_CONTACT_COMPANY_CASES = {
+  "contacts.create_new_company_verifies_custom_fields": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runContactCompanyCreationCheck",
+      description:
+        "Real browser-driven creation of a brand-new Company Contact through the real \"New Contact\" UI, Company type, correlated against the approved lawcus.contacts.create contract. Live-verified 2026-09-16.",
+    }),
+    definition: {
+      id: "contacts.create_new_company_verifies_custom_fields",
+      name: "Create a new Company Contact and verify its custom fields section",
+      layer: "both",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+  "contacts.create_company_mandatory_field_validation": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runContactCompanyMandatoryFieldValidationCheck",
+      description:
+        "Real browser-driven check that the New Contact form's Company-type required field (Name) shows Lawcus's own inline validation and blocks creation when left empty. Directly observed against real staging before being written (2026-09-16): the Name field shows \"This field is required and cannot be empty.\" and no contact is created — exactly one message, since Company has no First/Last split.",
+    }),
+    definition: {
+      id: "contacts.create_company_mandatory_field_validation",
+      name: "Required-field validation blocks an empty Company Contact",
+      layer: "ui",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+};
+
 export const UPDATE_CONTACT_CASES = {
   "contacts.custom_field_update_existing": {
     source: nativeSource({
@@ -87,7 +129,7 @@ export const UPDATE_CONTACT_CASES = {
   },
 };
 
-export const CONTACTS_NATIVE_CASES = { ...CREATE_CONTACT_CASES, ...UPDATE_CONTACT_CASES };
+export const CONTACTS_NATIVE_CASES = { ...CREATE_CONTACT_CASES, ...CREATE_CONTACT_COMPANY_CASES, ...UPDATE_CONTACT_CASES };
 
 export const LEADS_NATIVE_CASES = {
   "leads.custom_field_update_existing": {
@@ -128,8 +170,9 @@ export const LEADS_NATIVE_CASES = {
 // run_approved_suite tool) that need "everything in this suite" without
 // re-deriving it from testbook.tree() every time.
 export const NATIVE_SUITE_MEMBERS = {
-  "Create Contact": Object.keys(CREATE_CONTACT_CASES),
-  "Update Contact": Object.keys(UPDATE_CONTACT_CASES),
+  "Create Contact - Person": Object.keys(CREATE_CONTACT_CASES),
+  "Create Contact - Company": Object.keys(CREATE_CONTACT_COMPANY_CASES),
+  "Update Contact - Person": Object.keys(UPDATE_CONTACT_CASES),
   "lead-verification": Object.keys(LEADS_NATIVE_CASES),
 };
 
@@ -161,6 +204,14 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
       const r = await runContactMandatoryFieldValidationCheck();
       return { passed: r.messageCount === 2 && r.noContactCreated, actual: JSON.stringify(r) };
     },
+    "contacts.create_new_company_verifies_custom_fields": async () => {
+      const r = await runContactCompanyCreationCheck({ apiContracts, name: `QA Agent - ${ts}` });
+      return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
+    },
+    "contacts.create_company_mandatory_field_validation": async () => {
+      const r = await runContactCompanyMandatoryFieldValidationCheck();
+      return { passed: r.messageCount === 1 && r.noContactCreated, actual: JSON.stringify(r) };
+    },
     "leads.custom_field_update_existing": async () => {
       const r = await runLeadCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_LEAD_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
       return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
@@ -179,16 +230,24 @@ export function seedLawcusNativeCases(testbook) {
   testbook.syncCases({
     featureName: "Contacts",
     featureDescription: "People and companies stored in Lawcus — clients, potential clients, and other contacts.",
-    suiteName: "Create Contact",
-    suiteDescription: "Real, browser-driven checks of the New Contact form — creation and its own field validation.",
+    suiteName: "Create Contact - Person",
+    suiteDescription: "Real, browser-driven checks of the New Contact form, Person type — creation and its own field validation.",
     priority: "normal",
     entries: CREATE_CONTACT_CASES,
   });
   testbook.syncCases({
     featureName: "Contacts",
     featureDescription: "People and companies stored in Lawcus — clients, potential clients, and other contacts.",
-    suiteName: "Update Contact",
-    suiteDescription: "Real, browser-driven checks of editing an existing Contact.",
+    suiteName: "Create Contact - Company",
+    suiteDescription: "Real, browser-driven checks of the New Contact form, Company type — creation and its own field validation.",
+    priority: "normal",
+    entries: CREATE_CONTACT_COMPANY_CASES,
+  });
+  testbook.syncCases({
+    featureName: "Contacts",
+    featureDescription: "People and companies stored in Lawcus — clients, potential clients, and other contacts.",
+    suiteName: "Update Contact - Person",
+    suiteDescription: "Real, browser-driven checks of editing an existing Person Contact.",
     priority: "normal",
     entries: UPDATE_CONTACT_CASES,
   });

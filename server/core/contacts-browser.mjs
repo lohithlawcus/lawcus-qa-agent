@@ -49,6 +49,34 @@ async function ensureFieldOnForm(page, fieldName) {
   await page.waitForTimeout(500);
 }
 
+/** Opens the New Contact dialog from the Contacts list — shared by every
+ * create/validate case below (Person and Company alike). */
+async function openNewContactDialog(page) {
+  await page.goto(STAGING + "/dashboard", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1500);
+  await page.locator("text=Contacts").first().click();
+  await page.waitForTimeout(1500);
+  await page.getByText("New Contact", { exact: false }).first().click().catch(async () => {
+    await page.getByRole("button", { name: /new/i }).first().click();
+    await page.waitForTimeout(500);
+    await page.getByText("New Contact", { exact: false }).first().click();
+  });
+  await page.waitForTimeout(1500);
+}
+
+/** Switches the open New Contact dialog to Company type. Person is the
+ * dialog's own default, so there's no equivalent selectPerson — nothing
+ * to switch away from. Scoped to the dialog: the Contacts LIST page
+ * behind it has its own unrelated "Company" filter tab with the exact
+ * same visible text, and an unscoped locator resolves to that one
+ * instead (real failure hit exploring this live, 2026-09-16).
+ */
+async function selectCompanyType(page) {
+  const dialog = page.locator('[role="dialog"]');
+  await dialog.getByText("Company", { exact: true }).first().click();
+  await page.waitForTimeout(500);
+}
+
 /**
  * Creates a brand-new standalone Person contact through the real "New
  * Contact" UI (not nested inside a Lead) and returns its real uuid,
@@ -61,16 +89,7 @@ export async function createContactViaBrowser({ context, apiContracts, firstName
   const observer = attachNetworkObserver(context);
   const page = await context.newPage();
   try {
-    await page.goto(STAGING + "/dashboard", { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1500);
-    await page.locator("text=Contacts").first().click();
-    await page.waitForTimeout(1500);
-    await page.getByText("New Contact", { exact: false }).first().click().catch(async () => {
-      await page.getByRole("button", { name: /new/i }).first().click();
-      await page.waitForTimeout(500);
-      await page.getByText("New Contact", { exact: false }).first().click();
-    });
-    await page.waitForTimeout(1500);
+    await openNewContactDialog(page);
     await page.locator('input[name="firstName"], input[placeholder*="First"]').first().fill(firstName);
     await page.locator('input[name="lastName"], input[placeholder*="Last"]').first().fill(lastName);
     await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -105,6 +124,44 @@ export async function createContactViaBrowser({ context, apiContracts, firstName
 }
 
 /**
+ * Creates a brand-new standalone Company contact through the real "New
+ * Contact" UI, Company type, and returns its real uuid, correlating the
+ * resulting network traffic against the approved lawcus.contacts.create
+ * contract. Only sets Name — Company's Basic Details has no First/Middle/
+ * Last split, just one required "Name" field (real, observed 2026-09-16;
+ * see selectCompanyType's comment on why this is a real, separate form,
+ * not Person's form with fields hidden).
+ */
+export async function createCompanyContactViaBrowser({ context, apiContracts, name }) {
+  const observer = attachNetworkObserver(context);
+  const page = await context.newPage();
+  try {
+    await openNewContactDialog(page);
+    await selectCompanyType(page);
+    await page.locator('input[name="name"]').first().fill(name);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    // Same real post-save navigation race as Person creation — see
+    // createContactViaBrowser's comment above for the evidence.
+    await page.waitForURL(/\/contact\/[a-f0-9-]{36}/, { timeout: 15000 }).catch(() => {});
+
+    const contract = apiContracts.resolveApprovedContract("lawcus.contacts.create");
+    const correlation = correlateObservation({
+      contract,
+      events: observer.events,
+      host: new URL(API_ORIGIN).hostname,
+      cardinality: "exactly_one",
+    });
+
+    const match = page.url().match(/\/contact\/([a-f0-9-]{36})/);
+    if (!match) throw new Error(`Could not determine the created contact's uuid from the post-save URL: ${page.url()}`);
+    return { uuid: match[1], correlation, events: observer.events };
+  } finally {
+    observer.dispose();
+    await page.close().catch(() => {});
+  }
+}
+
+/**
  * Opens the New Contact form and clicks Save with every field left empty —
  * a real, observed check (2026-09-16 exploration) that the two required
  * fields (First Name, Last Name) show Lawcus's own inline validation text
@@ -116,17 +173,7 @@ const REQUIRED_FIELD_MESSAGE = "This field is required and cannot be empty.";
 export async function verifyMandatoryFieldValidationViaBrowser({ context }) {
   const page = await context.newPage();
   try {
-    await page.goto(STAGING + "/dashboard", { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1500);
-    await page.locator("text=Contacts").first().click();
-    await page.waitForTimeout(1500);
-    await page.getByText("New Contact", { exact: false }).first().click().catch(async () => {
-      await page.getByRole("button", { name: /new/i }).first().click();
-      await page.waitForTimeout(500);
-      await page.getByText("New Contact", { exact: false }).first().click();
-    });
-    await page.waitForTimeout(1500);
-
+    await openNewContactDialog(page);
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await page.waitForTimeout(1000);
 
@@ -135,6 +182,28 @@ export async function verifyMandatoryFieldValidationViaBrowser({ context }) {
     // genuinely created contact is the only thing that would put a real
     // contact uuid into it (mirrors createContactViaBrowser's own
     // post-save URL check, used here as proof nothing was created).
+    const noContactCreated = !/\/contact\/[a-f0-9-]{36}/.test(page.url());
+
+    return { messageCount, noContactCreated };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+/** Company-type counterpart to verifyMandatoryFieldValidationViaBrowser:
+ * Company's Basic Details has exactly one required field (Name, not
+ * First/Last), so this checks for exactly one validation message instead
+ * of two — a real, observed difference (2026-09-16 exploration), not the
+ * Person check reused by assumption. */
+export async function verifyMandatoryFieldValidationCompanyViaBrowser({ context }) {
+  const page = await context.newPage();
+  try {
+    await openNewContactDialog(page);
+    await selectCompanyType(page);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForTimeout(1000);
+
+    const messageCount = await page.getByText(REQUIRED_FIELD_MESSAGE, { exact: true }).count();
     const noContactCreated = !/\/contact\/[a-f0-9-]{36}/.test(page.url());
 
     return { messageCount, noContactCreated };
