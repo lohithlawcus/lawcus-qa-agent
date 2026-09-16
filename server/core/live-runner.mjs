@@ -109,7 +109,14 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
    const id=randomUUID();const started=Date.now();const events=[];const blocked=new Set();let context;let page;let observer;let actual=liveDescriptions[scenario].expected;let status='passed';let healed=false;let candidate;let loginRequests=0;let loginStatus;let logoutRequested=false;let logoutRequests=0;let failureCategory='behavior-or-automation';
    const event=(action,result)=>events.push({at:now(),action,result});
    try{
-    browser=await launch(proxy);
+    // Headed, not headless — the user asked to watch this specific flow
+    // run (2026-09-16): "the browser should open the url and test the
+    // feature." Same pattern already used for connectInBrowser,
+    // verifyPersonaInBrowser and startAuthoringSession below — this app is
+    // local, single-operator tooling ("Local development" in its own UI),
+    // never CI (CI's test:browser only exercises runner.mjs's fixture
+    // path, never this function — confirmed, not assumed).
+    browser=await launch(proxy,false);
     context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:{width:1280,height:900}});context.setDefaultTimeout(12000);context.setDefaultNavigationTimeout(25000);
     observer=attachNetworkObserver(context);
     await context.routeWebSocket(/.*/,socket=>socket.close());
