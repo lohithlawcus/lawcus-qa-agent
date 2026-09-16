@@ -181,3 +181,25 @@ test("backfillHistory links only unlinked rows matching by scenario name, and ne
     assert.equal(again, 0);
   });
 });
+
+test("syncing an existing case under a renamed/different suite moves it there, without touching its version history", () => {
+  withStore((db, audit) => {
+    const testbook = openTestBook(db, audit);
+    testbook.syncCases({ ...SYNC_ARGS, entries: entriesFor(CASE_A_V1) });
+    const before = testbook.tree()[0].suites[0].cases[0];
+    assert.equal(before.currentVersion, 1);
+
+    testbook.syncCases({ ...SYNC_ARGS, suiteName: "login-essentials-v2", entries: entriesFor(CASE_A_V1) });
+
+    const tree = testbook.tree();
+    // The old suite is left with zero cases, and tree() (the read-only
+    // TestBook view) leaves an empty suite out entirely — it's current
+    // state, not history, so it's not worth showing as permanent noise.
+    assert.equal(tree[0].suites.length, 1, "the now-empty old suite is not shown");
+    const newSuite = tree[0].suites.find((s) => s.name === "login-essentials-v2");
+    assert.ok(newSuite, "the new suite is shown");
+    assert.equal(newSuite.cases.length, 1);
+    assert.equal(newSuite.cases[0].externalId, "sample.case-a");
+    assert.equal(newSuite.cases[0].currentVersion, 1, "moving suites is not a version change");
+  });
+});

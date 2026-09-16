@@ -126,10 +126,21 @@ export function openTestBook(db, audit) {
             0,
             at,
           );
-          testCase = { id, external_id: definition.id, current_version: 0 };
+          testCase = { id, external_id: definition.id, current_version: 0, suite_id: suite.id };
           audit?.("testbook.case.created", id, {
             externalId: definition.id,
             title: definition.name,
+          });
+        } else if (testCase.suite_id !== suite.id) {
+          // Suite membership is current-state (like title/status below), not
+          // history — moving a case to a renamed/reorganized suite is a
+          // deliberate reassignment, not a rewrite of its versioned
+          // definitions, which are untouched by this.
+          db.prepare("UPDATE test_cases SET suite_id=? WHERE id=?").run(suite.id, testCase.id);
+          testCase = { ...testCase, suite_id: suite.id };
+          audit?.("testbook.case.moved", testCase.id, {
+            externalId: definition.id,
+            toSuite: suiteName,
           });
         }
         const hash = sourceHash(source);
@@ -250,7 +261,10 @@ export function openTestBook(db, audit) {
     },
 
     /** Feature -> suites -> cases (with tags parsed and execution stats
-     * attached), for the read-only TestBook view. */
+     * attached), for the read-only TestBook view. A suite that's had every
+     * case moved out of it (syncCases's suite-reassignment) is real current
+     * state, not history — nothing meaningful to show, so it's left out
+     * here rather than kept as permanent empty-shell noise. */
     tree() {
       const features = db
         .prepare("SELECT * FROM features ORDER BY created_at")
@@ -282,7 +296,8 @@ export function openTestBook(db, audit) {
                 currentVersion: testCase.current_version,
                 stats: caseStats(testCase.id),
               })),
-          })),
+          }))
+          .filter((suite) => suite.cases.length > 0),
       }));
     },
   };

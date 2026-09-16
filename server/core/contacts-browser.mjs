@@ -104,6 +104,45 @@ export async function createContactViaBrowser({ context, apiContracts, firstName
   }
 }
 
+/**
+ * Opens the New Contact form and clicks Save with every field left empty —
+ * a real, observed check (2026-09-16 exploration) that the two required
+ * fields (First Name, Last Name) show Lawcus's own inline validation text
+ * and that no contact is actually created. Never fills anything, never
+ * saves; closes the drawer without creating a record either way.
+ */
+const REQUIRED_FIELD_MESSAGE = "This field is required and cannot be empty.";
+
+export async function verifyMandatoryFieldValidationViaBrowser({ context }) {
+  const page = await context.newPage();
+  try {
+    await page.goto(STAGING + "/dashboard", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    await page.locator("text=Contacts").first().click();
+    await page.waitForTimeout(1500);
+    await page.getByText("New Contact", { exact: false }).first().click().catch(async () => {
+      await page.getByRole("button", { name: /new/i }).first().click();
+      await page.waitForTimeout(500);
+      await page.getByText("New Contact", { exact: false }).first().click();
+    });
+    await page.waitForTimeout(1500);
+
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForTimeout(1000);
+
+    const messageCount = await page.getByText(REQUIRED_FIELD_MESSAGE, { exact: true }).count();
+    // The drawer overlays the Contacts list without changing the URL; a
+    // genuinely created contact is the only thing that would put a real
+    // contact uuid into it (mirrors createContactViaBrowser's own
+    // post-save URL check, used here as proof nothing was created).
+    const noContactCreated = !/\/contact\/[a-f0-9-]{36}/.test(page.url());
+
+    return { messageCount, noContactCreated };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 /** Opens the contact, reads the named custom field's current value, and
  * closes without saving anything — a real, separate navigation used both
  * to capture before-state and for independent post-update verification

@@ -1,6 +1,7 @@
 import {
   runContactCustomFieldCheck,
   runContactCreationCheck,
+  runContactMandatoryFieldValidationCheck,
   runLeadCustomFieldCheck,
   runLeadCreationCheck,
 } from "../core/live-runner.mjs";
@@ -26,23 +27,13 @@ import {
 
 const nativeSource = (obj) => JSON.stringify(obj, null, 2);
 
-export const CONTACTS_NATIVE_CASES = {
-  "contacts.custom_field_update_existing": {
-    source: nativeSource({
-      kind: "native",
-      module: "server/core/live-runner.mjs",
-      function: "runContactCustomFieldCheck",
-      description:
-        "Real browser-driven update-and-restore of an existing Contact's custom field value, correlated against the approved lawcus.contacts.update contract. Live-verified in Step 15 (commit 67596d4).",
-    }),
-    definition: {
-      id: "contacts.custom_field_update_existing",
-      name: "Update an existing Contact's custom field and restore it",
-      layer: "both",
-      risk: "normal",
-      status: "approved",
-    },
-  },
+// V5 "Start with Contacts" (2026-09-16) — the Contacts feature is now
+// organized into the suites the user actually asked for (Create Contact,
+// Update Contact), not one flat "contact-verification" bucket. Each suite
+// is its own object so seedLawcusNativeCases can sync them under distinct
+// suite names; CONTACTS_NATIVE_CASES below stays the merged view existing
+// callers (buildNativeRunners, the native-cases tests) already rely on.
+export const CREATE_CONTACT_CASES = {
   "contacts.create_new_verifies_custom_fields": {
     source: nativeSource({
       kind: "native",
@@ -59,7 +50,44 @@ export const CONTACTS_NATIVE_CASES = {
       status: "approved",
     },
   },
+  "contacts.create_mandatory_field_validation": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runContactMandatoryFieldValidationCheck",
+      description:
+        "Real browser-driven check that the New Contact form's required fields (First Name, Last Name) show Lawcus's own inline validation and block creation when left empty. Directly observed against real staging before being written (2026-09-16): both fields show \"This field is required and cannot be empty.\" and no contact is created.",
+    }),
+    definition: {
+      id: "contacts.create_mandatory_field_validation",
+      name: "Required-field validation blocks an empty Contact",
+      layer: "ui",
+      risk: "normal",
+      status: "approved",
+    },
+  },
 };
+
+export const UPDATE_CONTACT_CASES = {
+  "contacts.custom_field_update_existing": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runContactCustomFieldCheck",
+      description:
+        "Real browser-driven update-and-restore of an existing Contact's custom field value, correlated against the approved lawcus.contacts.update contract. Live-verified in Step 15 (commit 67596d4).",
+    }),
+    definition: {
+      id: "contacts.custom_field_update_existing",
+      name: "Update an existing Contact's custom field and restore it",
+      layer: "both",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+};
+
+export const CONTACTS_NATIVE_CASES = { ...CREATE_CONTACT_CASES, ...UPDATE_CONTACT_CASES };
 
 export const LEADS_NATIVE_CASES = {
   "leads.custom_field_update_existing": {
@@ -100,7 +128,8 @@ export const LEADS_NATIVE_CASES = {
 // run_approved_suite tool) that need "everything in this suite" without
 // re-deriving it from testbook.tree() every time.
 export const NATIVE_SUITE_MEMBERS = {
-  "contact-verification": Object.keys(CONTACTS_NATIVE_CASES),
+  "Create Contact": Object.keys(CREATE_CONTACT_CASES),
+  "Update Contact": Object.keys(UPDATE_CONTACT_CASES),
   "lead-verification": Object.keys(LEADS_NATIVE_CASES),
 };
 
@@ -128,6 +157,10 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
       const r = await runContactCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts) });
       return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
     },
+    "contacts.create_mandatory_field_validation": async () => {
+      const r = await runContactMandatoryFieldValidationCheck();
+      return { passed: r.messageCount === 2 && r.noContactCreated, actual: JSON.stringify(r) };
+    },
     "leads.custom_field_update_existing": async () => {
       const r = await runLeadCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_LEAD_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
       return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
@@ -146,10 +179,18 @@ export function seedLawcusNativeCases(testbook) {
   testbook.syncCases({
     featureName: "Contacts",
     featureDescription: "People and companies stored in Lawcus — clients, potential clients, and other contacts.",
-    suiteName: "contact-verification",
-    suiteDescription: "Real, browser-driven Contact checks (custom field update/restore, new-Contact creation) built in Step 15.",
+    suiteName: "Create Contact",
+    suiteDescription: "Real, browser-driven checks of the New Contact form — creation and its own field validation.",
     priority: "normal",
-    entries: CONTACTS_NATIVE_CASES,
+    entries: CREATE_CONTACT_CASES,
+  });
+  testbook.syncCases({
+    featureName: "Contacts",
+    featureDescription: "People and companies stored in Lawcus — clients, potential clients, and other contacts.",
+    suiteName: "Update Contact",
+    suiteDescription: "Real, browser-driven checks of editing an existing Contact.",
+    priority: "normal",
+    entries: UPDATE_CONTACT_CASES,
   });
   testbook.syncCases({
     featureName: "Leads",
