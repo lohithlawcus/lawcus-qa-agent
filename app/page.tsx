@@ -438,6 +438,12 @@ export default function Home() {
       await fn();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
+      // The notice renders at the very top of the page. A rejection like
+      // "a test is already running" comes back almost instantly, and the
+      // button itself gives no other feedback — if the user has scrolled
+      // down to review a plan (the normal flow before clicking Run), the
+      // notice lands off-screen and it looks like the click did nothing.
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } finally {
       setBusy(false);
     }

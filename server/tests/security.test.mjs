@@ -125,9 +125,15 @@ test("Persistence migrates once, enforces one active run and marks crash leftove
       JSON.stringify(builtInPlan("Test login")),
       now(),
     );
+    // Old enough to be a genuine crash leftover, not a healthy run another
+    // process's openStore() call happens to observe mid-flight (real
+    // incident, 2026-09-16/17: a one-off diagnostic script's own
+    // openStore() call used to interrupt an unrelated, still-healthy real
+    // run just by opening the store while it was running).
+    const staleStartedAt = new Date(Date.now() - 15 * 60_000).toISOString();
     db.prepare(
       "INSERT INTO runs(id,runbook_id,status,replay,started_at) VALUES(?,?,?,?,?)",
-    ).run(randomUUID(), book, "running", 0, now());
+    ).run(randomUUID(), book, "running", 0, staleStartedAt);
     assert.throws(() =>
       db
         .prepare(
@@ -149,6 +155,42 @@ test("Persistence migrates once, enforces one active run and marks crash leftove
       "interrupted",
     );
     assert.equal(db.prepare("SELECT count(*) n FROM audit_events").get().n, 1);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("openStore() never interrupts a run that's still genuinely healthy — only ones old enough to be a real crash leftover", () => {
+  // The actual bug (2026-09-16/17): a short-lived script calling
+  // openStore() purely to read the database — no different from any
+  // other process on this machine that happens to open the same file —
+  // used to interrupt a real, currently-executing run in a completely
+  // separate, healthy server process, just by opening the store while
+  // that run was in progress. Recency is what distinguishes "another
+  // process's run, still healthy" from "a crash leftover nobody is ever
+  // going to finish."
+  const dir = mkdtempSync(join(tmpdir(), "qa-store-healthy-"));
+  try {
+    let { db } = openStore(dir);
+    const book = randomUUID();
+    db.prepare("INSERT INTO runbooks VALUES(?,?,?,?,?,?,?,?)").run(
+      book, 1, "fixture", "Login essentials", "Test login", "built-in",
+      JSON.stringify(builtInPlan("Test login")), now(),
+    );
+    const runId = randomUUID();
+    db.prepare(
+      "INSERT INTO runs(id,runbook_id,status,replay,started_at) VALUES(?,?,?,?,?)",
+    ).run(runId, book, "running", 0, now());
+    db.close();
+    // Simulate an unrelated process opening the same store mid-run — a
+    // diagnostic script, an MCP tool call, anything else that calls
+    // openStore() without meaning to touch this run at all.
+    ({ db } = openStore(dir));
+    assert.equal(
+      db.prepare("SELECT status FROM runs WHERE id=?").get(runId).status,
+      "running",
+      "a recent run must survive an unrelated process's openStore() call",
+    );
     db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

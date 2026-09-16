@@ -213,10 +213,20 @@ export function openStore(directory) {
   // real usage, not silently turning it off. INSERT OR IGNORE means this
   // never overwrites an operator's own choice on a later startup.
   db.prepare("INSERT OR IGNORE INTO ai_gate_settings(id,ai_enabled,updated_at) VALUES(1,1,?)").run(now());
-  const stale = db.prepare("SELECT id FROM runs WHERE status='running'").all();
+  // Real incident (2026-09-16/17): this used to interrupt EVERY row still
+  // 'running', unconditionally, on every single openStore() call — not
+  // just the long-lived server process's own startup. A short-lived
+  // one-off script (e.g. a diagnostic query) calling openStore() while a
+  // real run was genuinely, healthily still executing in the actual
+  // server process silently killed that run out from under itself. A
+  // crash leftover is distinguishable from a healthy in-progress run by
+  // age: no real check in this project takes anywhere near 10 minutes, so
+  // only rows started before that cutoff are treated as stale.
+  const staleCutoff = new Date(Date.now() - 10 * 60_000).toISOString();
+  const stale = db.prepare("SELECT id FROM runs WHERE status='running' AND started_at<?").all(staleCutoff);
   db.prepare(
-    "UPDATE runs SET status='interrupted',finished_at=?,summary='The runner stopped before this run completed. Review the partial results before running again.' WHERE status='running'",
-  ).run(now());
+    "UPDATE runs SET status='interrupted',finished_at=?,summary='The runner stopped before this run completed. Review the partial results before running again.' WHERE status='running' AND started_at<?",
+  ).run(now(), staleCutoff);
   const audit = (action, entityId, details = {}) =>
     db
       .prepare(
