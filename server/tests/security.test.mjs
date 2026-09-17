@@ -160,6 +160,27 @@ test("Persistence migrates once, enforces one active run and marks crash leftove
     rmSync(dir, { recursive: true, force: true });
   }
 });
+test("openStore() seeds the three new Lawcus environments and renames the original to Fiveriverz, without touching its id", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qa-multi-env-"));
+  try {
+    const { db } = openStore(dir);
+    const byId = Object.fromEntries(db.prepare("SELECT * FROM environments").all().map((e) => [e.id, e]));
+    assert.equal(byId.lawcus.name, "Fiveriverz");
+    assert.equal(byId.lawcus.url, "https://lohith.fiveriverz.com", "renamed, not re-identified");
+    assert.equal(byId["co-server"].url, "https://lohith.lawcus.co");
+    assert.equal(byId["prod-usa"].url, "https://lohith.lawcus.com");
+    assert.equal(byId["prod-eu"].url, "https://lohith.eu.lawcus.com");
+    for (const id of ["co-server", "prod-usa", "prod-eu"]) {
+      const confirmation = db.prepare("SELECT * FROM environment_confirmations WHERE environment_id=?").get(id);
+      const facts = JSON.parse(confirmation.facts);
+      assert.equal(facts.staging, true);
+      assert.equal(facts.mfa, false);
+    }
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 test("openStore() never interrupts a run that's still genuinely healthy — only ones old enough to be a real crash leftover", () => {
   // The actual bug (2026-09-16/17): a short-lived script calling
   // openStore() purely to read the database — no different from any

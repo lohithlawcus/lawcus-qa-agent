@@ -5,17 +5,32 @@ import {keychain,readSecret} from './secrets.mjs';
 // (validated against secrets.mjs's fixed allowlist by keychain() itself,
 // not repeated here) rather than always writing 'lawcus-login'.
 const PERSONA_ACCOUNTS=['lawcus-persona-admin','lawcus-persona-member','lawcus-persona-co-counsel','lawcus-persona-custom'];
+// V5 "add two more urls" (2026-09-17) — each Lawcus environment has its
+// own dedicated account (operator's own answer), so each gets its own
+// Keychain slot. 'lawcus' stays the literal default so every existing
+// caller (the primary environment's own save form) is unaffected.
+export const ENVIRONMENT_ACCOUNTS={
+ 'lawcus':'lawcus-login',
+ 'co-server':'lawcus-login-co-server',
+ 'prod-usa':'lawcus-login-prod-usa',
+ 'prod-eu':'lawcus-login-prod-eu',
+};
 export const CredentialSetup=z.discriminatedUnion('kind',[
- z.object({kind:z.literal('lawcus'),username:z.string().email().max(254),password:z.string().min(1).max(1024)}).strict(),
+ z.object({kind:z.literal('lawcus'),environmentId:z.enum(['lawcus','co-server','prod-usa','prod-eu']).default('lawcus'),username:z.string().email().max(254),password:z.string().min(1).max(1024)}).strict(),
  z.object({kind:z.literal('openai'),apiKey:z.string().startsWith('sk-').min(25).max(600)}).strict(),
  z.object({kind:z.literal('lawcus-persona'),account:z.enum(PERSONA_ACCOUNTS),username:z.string().email().max(254),password:z.string().min(1).max(1024)}).strict()
 ]);
 export async function setupStatus(){
- const [login,ai]=await Promise.all([keychain('exists','lawcus-login'),keychain('exists','openai-api')]);
- return {loginConfigured:login.exists,aiConfigured:ai.exists,target:'https://lohith.fiveriverz.com',storage:'macOS Keychain'};
+ const environmentIds=Object.keys(ENVIRONMENT_ACCOUNTS);
+ const [logins,ai]=await Promise.all([
+  Promise.all(environmentIds.map(id=>keychain('exists',ENVIRONMENT_ACCOUNTS[id]))),
+  keychain('exists','openai-api'),
+ ]);
+ const loginConfiguredByEnvironment=Object.fromEntries(environmentIds.map((id,i)=>[id,logins[i].exists]));
+ return {loginConfigured:loginConfiguredByEnvironment.lawcus,loginConfiguredByEnvironment,aiConfigured:ai.exists,target:'https://lohith.fiveriverz.com',storage:'macOS Keychain'};
 }
 export async function saveCredentials(input){
- if(input.kind==='lawcus')await keychain('set','lawcus-login',JSON.stringify({username:input.username,password:input.password}));
+ if(input.kind==='lawcus')await keychain('set',ENVIRONMENT_ACCOUNTS[input.environmentId],JSON.stringify({username:input.username,password:input.password}));
  else if(input.kind==='lawcus-persona')await keychain('set',input.account,JSON.stringify({username:input.username,password:input.password}));
  else await keychain('set','openai-api',input.apiKey);
  const key=await keychain('exists','artifact-key');if(!key.exists)await keychain('set','artifact-key',randomBytes(32).toString('base64'));

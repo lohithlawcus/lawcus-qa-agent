@@ -779,8 +779,9 @@ p {
 .safety-grid,
 .environment-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 24px;
+  align-items: start;
 }
 .safety-row {
   display: flex;

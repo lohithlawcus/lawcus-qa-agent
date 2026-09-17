@@ -192,7 +192,11 @@ type NetworkAuthorityRow = {
   status: string;
 };
 type State = {
-  environments: { id: string; name: string; url: string }[];
+  environments: { id: string; name: string; url: string; kind: string; execution_enabled: number }[];
+  environmentConfirmations: {
+    environmentId: string;
+    facts: { staging: boolean; dedicatedAccountAvailable: boolean; mfa: boolean; sso: boolean; captcha: boolean };
+  }[];
   runbooks: Book[];
   runs: Run[];
   clarifications: Question[];
@@ -916,12 +920,11 @@ export default function Home() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="fixture">
-                          Local test application
-                        </SelectItem>
-                        <SelectItem value="lawcus">
-                          Lawcus staging
-                        </SelectItem>
+                        {(state?.environments || []).map((e) => (
+                          <SelectItem key={e.id} value={e.id}>
+                            {e.kind === "fixture" ? "Local test application" : e.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <Button
@@ -2172,45 +2175,11 @@ export default function Home() {
             </div>
           </TabsContent>
           <TabsContent value="environment">
-            <SecureSetup/>
+            <SecureSetup
+              environments={state?.environments}
+              environmentConfirmations={state?.environmentConfirmations}
+            />
             <div className="environment-grid">
-              <div className="panel">
-                <div className="panel-heading">
-                  <div>
-                    <span className="section-label">REQUESTED TARGET</span>
-                    <h2>Lawcus staging</h2>
-                  </div>
-                  <Badge variant="outline">Staging confirmed</Badge>
-                </div>
-                <div className="url-field">
-                  <Globe size={18} />
-                  https://lohith.fiveriverz.com
-                </div>
-                <p className="subtle">
-                  You confirmed this is staging, a dedicated test account is available, and login requires no MFA, SSO or CAPTCHA. Connection status is shown above; actual outcomes appear in Run history.
-                </p>
-                <div className="notice">
-                  <LockKeyhole size={18} />
-                  <span>
-                    Save your staging account and check the browser connection above. Standard login checks work without an API key; English planning requires OpenAI API access.
-                  </span>
-                </div>
-                <h3>What is needed next</h3>
-                <ol className="next-steps">
-                  <li>Staging environment: confirmed by you.</li>
-                  <li>
-                    Dedicated QA account: available; permissions still to verify.
-                  </li>
-                  <li>No MFA, SSO or CAPTCHA: confirmed by you.</li>
-                  <li>
-                    Keep the launcher window open while tests are running.
-                  </li>
-                </ol>
-                <p className="small-note">
-                  Do not put passwords in test requests or clarification
-                  answers. Use only the secure fields above.
-                </p>
-              </div>
               <div className="scope-card">
                 <FlaskConical size={26} />
                 <h2>Local test application</h2>

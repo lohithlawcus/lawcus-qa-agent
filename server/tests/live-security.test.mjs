@@ -95,6 +95,15 @@ test('API authentication and quota errors stay actionable, and obvious secrets n
 test('Credential input rejects missing values and arbitrary credential names',()=>{
  for(const input of [{kind:'lawcus',username:'qa@example.com'},{kind:'openai'},{kind:'unknown',apiKey:'sk-synthetic-value-that-is-not-real'}])assert.equal(CredentialSetup.safeParse(input).success,false);
 });
+test('Credential input defaults environmentId to the primary environment, and rejects an unknown one',()=>{
+ const withoutEnvironmentId=CredentialSetup.safeParse({kind:'lawcus',username:'qa@example.com',password:'x'});
+ assert.equal(withoutEnvironmentId.success,true);
+ assert.equal(withoutEnvironmentId.data.environmentId,'lawcus');
+ const named=CredentialSetup.safeParse({kind:'lawcus',environmentId:'prod-eu',username:'qa@example.com',password:'x'});
+ assert.equal(named.success,true);
+ assert.equal(named.data.environmentId,'prod-eu');
+ assert.equal(CredentialSetup.safeParse({kind:'lawcus',environmentId:'made-up',username:'qa@example.com',password:'x'}).success,false);
+});
 
 
 test('AI billing diagnostics distinguish known codes without exposing provider messages',async()=>{

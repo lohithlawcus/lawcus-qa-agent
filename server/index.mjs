@@ -495,6 +495,17 @@ const server = createServer(
       if (req.method === "GET" && pathname === "/state") {
         json(res, 200, {
           environments: db.prepare("SELECT * FROM environments").all(),
+          // The latest confirmation per environment — real facts the
+          // operator stated in conversation (see migrations 003, 019),
+          // never assumed. Drives the per-environment card in the
+          // Environment tab instead of hardcoded copy.
+          environmentConfirmations: db
+            .prepare(
+              `SELECT environment_id, facts FROM environment_confirmations ec
+               WHERE version = (SELECT MAX(version) FROM environment_confirmations WHERE environment_id = ec.environment_id)`,
+            )
+            .all()
+            .map((row) => ({ environmentId: row.environment_id, facts: JSON.parse(row.facts) })),
           runbooks: db
             .prepare(
               "SELECT * FROM runbooks ORDER BY created_at DESC LIMIT 100",

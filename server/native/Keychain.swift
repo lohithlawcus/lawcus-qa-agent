@@ -1,10 +1,14 @@
 import Foundation
 import Security
 
-// Only this application's three credentials are addressable. Values travel through
+// Only this application's own credentials are addressable. Values travel through
 // private pipes, never command arguments, environment variables or log messages.
+// 'lawcus-login-*' added 2026-09-17 — one dedicated account per additional
+// Lawcus environment (Co Server, Prod USA, Prod EU), same discipline as
+// 'lawcus-login' itself: a literal, deliberate allowlist entry per real
+// credential, never a wildcard/pattern match.
 let service = "com.lawcus.qa-agent.local.v1"
-let allowed = Set(["lawcus-login", "openai-api", "artifact-key"])
+let allowed = Set(["lawcus-login", "lawcus-login-co-server", "lawcus-login-prod-usa", "lawcus-login-prod-eu", "openai-api", "artifact-key"])
 func reply(_ object: [String: Any]) -> Never {
     if let data = try? JSONSerialization.data(withJSONObject: object) {
         FileHandle.standardOutput.write(data)
