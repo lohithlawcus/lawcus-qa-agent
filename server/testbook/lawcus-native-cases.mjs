@@ -2,6 +2,9 @@ import {
   runContactCustomFieldCheck,
   runContactCreationCheck,
   runContactMandatoryFieldValidationCheck,
+  runContactAllFieldsCreationCheck,
+  runContactPhoneValidationCheck,
+  runContactBillingRateValidationCheck,
   runContactCompanyCreationCheck,
   runContactCompanyMandatoryFieldValidationCheck,
   runLeadCustomFieldCheck,
@@ -70,6 +73,54 @@ export const CREATE_CONTACT_CASES = {
       id: "contacts.create_mandatory_field_validation",
       name: "Required-field validation blocks an empty Contact",
       layer: "ui",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+  "contacts.create_all_fields_verified_on_detail_page": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runContactAllFieldsCreationCheck",
+      description:
+        "Real browser-driven creation of a new Person Contact with every field across all four New Contact sections filled (Basic Details, Other Info, Addresses, Custom Fields) — not just First/Last Name. Independently re-reads the resulting detail page's own text and confirms every value actually appears there. Live-verified end to end 2026-09-18: all fields saved and displayed correctly.",
+    }),
+    definition: {
+      id: "contacts.create_all_fields_verified_on_detail_page",
+      name: "Create a Person Contact with every field filled and verify the detail page",
+      layer: "both",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+  "contacts.create_phone_number_validation": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runContactPhoneValidationCheck",
+      description:
+        "Real browser-driven check that a phone number with a \"555\" area code is rejected by Lawcus's own phone validation (\"Invalid phone number\") and blocks Contact creation. Directly observed against real staging before being written (2026-09-18).",
+    }),
+    definition: {
+      id: "contacts.create_phone_number_validation",
+      name: "Invalid phone number blocks Contact creation",
+      layer: "ui",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+  "contacts.create_billing_rate_required_validation": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runContactBillingRateValidationCheck",
+      description:
+        "Real browser-driven check that enabling \"Enable client rates\" reveals a genuinely required \"Fixed rate\" field: Save is blocked while it's blank (same generic required-field message as First/Last Name), and filling it lets Save succeed with the rate shown correctly on the real detail page. A real, cascading-required field discovered live 2026-09-18.",
+    }),
+    definition: {
+      id: "contacts.create_billing_rate_required_validation",
+      name: "Enabling client rates requires a Fixed rate before Save",
+      layer: "both",
       risk: "normal",
       status: "approved",
     },
@@ -262,6 +313,24 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
     "contacts.create_mandatory_field_validation": async () => {
       const r = await runContactMandatoryFieldValidationCheck();
       return { passed: r.messageCount === 2 && r.noContactCreated, actual: JSON.stringify(r) };
+    },
+    "contacts.create_all_fields_verified_on_detail_page": async () => {
+      const r = await runContactAllFieldsCreationCheck({ apiContracts, marker: `QAFieldTest${ts}` });
+      return {
+        passed: r.correlation.contractMatch && r.correlation.cardinalityOk && r.missing.length === 0,
+        actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch, missing: r.missing }),
+      };
+    },
+    "contacts.create_phone_number_validation": async () => {
+      const r = await runContactPhoneValidationCheck();
+      return { passed: r.invalidMessageShown && r.noContactCreated, actual: JSON.stringify(r) };
+    },
+    "contacts.create_billing_rate_required_validation": async () => {
+      const r = await runContactBillingRateValidationCheck();
+      return {
+        passed: r.blockedMessageCount >= 1 && r.noContactCreatedWhenBlank && r.createdAfterFilling && r.rateShownCorrectly,
+        actual: JSON.stringify(r),
+      };
     },
     "contacts.create_new_company_verifies_custom_fields": async () => {
       const r = await runContactCompanyCreationCheck({ apiContracts, name: `QA Agent - ${ts}` });

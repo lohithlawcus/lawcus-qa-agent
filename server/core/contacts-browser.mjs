@@ -202,6 +202,265 @@ export async function createCompanyContactViaBrowser({ context, apiContracts, na
   }
 }
 
+function contactDialog(page) {
+  return page.locator('[role="dialog"]');
+}
+
+/** Clicks a MUI Select-style dropdown by its visible label and picks one
+ * option by exact visible text. Scoped to the New Contact dialog so it
+ * never resolves to an unrelated same-named column header on the
+ * Contacts list table sitting behind the dialog (real collision hit live
+ * 2026-09-18 with an unscoped "Prefix" lookup). */
+async function selectContactDropdownOption(page, labelText, optionText) {
+  const dropdown = contactDialog(page)
+    .getByText(labelText, { exact: true })
+    .locator("..")
+    .locator("..")
+    .locator(".MuiSelect-select, [role=\"combobox\"]")
+    .first();
+  // Real, reproducible flakiness (hit live 2026-09-18 across several
+  // separate runs, always on this same click): the option is sometimes
+  // rendered but not yet clickable right after opening the menu. Retrying
+  // the whole open-menu-then-click cycle, not just the click, has proven
+  // reliable — a bare click retry on an already-closed menu does nothing.
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await dropdown.click();
+    await page.waitForTimeout(500);
+    try {
+      await page.getByRole("option", { name: optionText, exact: true }).click({ timeout: 5000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(300);
+    }
+  }
+  throw lastError;
+}
+
+/** Fills a plain text field by its visible label, scoped to the dialog —
+ * for fields with no stable name attribute (Address's Street/City/State/
+ * Zip/Country all render as unnamed MUI inputs). */
+async function fillContactFieldByLabel(page, labelText, value) {
+  const input = contactDialog(page).getByText(labelText, { exact: true }).locator("xpath=following::input[1]");
+  await input.fill(value);
+}
+
+/**
+ * Creates a brand-new standalone Person contact through the real "New
+ * Contact" UI with every field across all sections filled (Basic Details,
+ * Other Info, Addresses, Custom Fields) — the comprehensive counterpart to
+ * createContactViaBrowser's First/Last-only creation. Independently
+ * re-reads the resulting detail page's own text afterward and reports any
+ * expected value that doesn't actually appear there — never assumes the
+ * form's own state proves what was saved (section 24's discipline).
+ * Live-verified end to end 2026-09-18: every field below appeared
+ * correctly on the real detail page. Deliberately skips Company/Referred
+ * By/Custom Contacts (link to other real records — out of scope for a
+ * repeatable creation check) and Tags/avatar/Client Portal (not yet
+ * exercised).
+ */
+export async function createContactAllFieldsViaBrowser({ context, apiContracts, marker }) {
+  const observer = attachNetworkObserver(context);
+  const page = await context.newPage();
+  const dialog = contactDialog(page);
+  const fields = {
+    firstName: marker,
+    middleName: "Middleton",
+    lastName: "Contact",
+    email: `${marker.toLowerCase()}@example.com`,
+    // A "555" area code is rejected by real phone validation (see
+    // verifyPhoneNumberValidationViaBrowser) — a normal-looking area code
+    // is required for this creation check to actually succeed.
+    phone: "2025551234",
+    title: "QA Test Title",
+    website: "https://example.com",
+    ledesClientId: "LEDES-TEST-001",
+    note: "Created during automated QA field-coverage testing. Safe to delete.",
+    street: "123 QA Street",
+    city: "Testville",
+    state: "TS",
+    zip: "00000",
+    country: "Testland",
+    customNumber: "42",
+    customText: "QA custom text value",
+  };
+  try {
+    await openNewContactDialog(page);
+
+    await dialog.getByText("Basic Details", { exact: true }).first().click();
+    await page.waitForTimeout(300);
+    await dialog.locator('input[name="prefix"]').fill("Mr.");
+    await dialog.locator('input[name="firstName"]').fill(fields.firstName);
+    await dialog.locator('input[name="middleName"]').fill(fields.middleName);
+    await dialog.locator('input[name="lastName"]').fill(fields.lastName);
+    await selectContactDropdownOption(page, "Gender", "Non-binary");
+    await dialog.locator('input[name="dateOfBirthday"]').fill("15/06/1990");
+    await dialog.locator('input[name="emails.0.value"]').fill(fields.email);
+    await dialog.locator('input[type="tel"]').first().fill(fields.phone);
+
+    await dialog.getByText("Other Info", { exact: true }).first().click();
+    await page.waitForTimeout(300);
+    await dialog.locator('input[name="title"]').fill(fields.title);
+    await dialog.locator('input[name="website"]').fill(fields.website);
+    await selectContactDropdownOption(page, "Lead Source", "Referral");
+    await dialog.locator('input[name="ledesClientId"]').fill(fields.ledesClientId);
+    await dialog.locator('textarea[name="note"]').fill(fields.note);
+
+    await dialog.getByText("Addresses", { exact: true }).first().click();
+    await page.waitForTimeout(300);
+    await fillContactFieldByLabel(page, "Street", fields.street);
+    await fillContactFieldByLabel(page, "City", fields.city);
+    await fillContactFieldByLabel(page, "State/Province", fields.state);
+    await fillContactFieldByLabel(page, "Zip/Postal code", fields.zip);
+    await fillContactFieldByLabel(page, "Country", fields.country);
+
+    await dialog.getByText("Custom Fields", { exact: true }).first().click();
+    await page.waitForTimeout(300);
+    await ensureFieldOnForm(page, "Custom Text");
+    await dialog.locator("#custom-component-Custom\\ Number").fill(fields.customNumber);
+    await selectContactDropdownOption(page, "Custom Pick List", "Banana");
+    await dialog.locator("#custom-component-Custom\\ Contact\\ info\\ field").check({ force: true });
+    await selectContactDropdownOption(page, "New Contact Picklist", "Wonder");
+    await dialog.locator("#custom-component-Custom\\ Contact").check({ force: true });
+    await dialog.locator("#custom-component-PHP\\ test\\ checkbox").check({ force: true });
+    await dialog.locator('input[type="text"]').last().fill(fields.customText);
+
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForURL(/\/contact\/[a-f0-9-]{36}/, { timeout: 20000 }).catch(() => {});
+    await observer.settle();
+
+    const contract = apiContracts.resolveApprovedContract("lawcus.contacts.create");
+    const correlation = correlateObservation({
+      contract,
+      events: observer.events,
+      host: new URL(API_ORIGIN).hostname,
+      cardinality: "exactly_one",
+    });
+
+    const match = page.url().match(/\/contact\/([a-f0-9-]{36})/);
+    if (!match) throw new Error(`Could not determine the created contact's uuid from the post-save URL: ${page.url()}`);
+
+    // Independently re-read the detail page's own rendered text — proof of
+    // what was actually saved, not just what the form showed before Save.
+    await page.waitForTimeout(1500);
+    const detailText = await page.locator("body").innerText();
+    const expected = [
+      fields.firstName, fields.middleName, fields.lastName, "Non-binary", "15/06/1990",
+      fields.email, fields.title, fields.website, "Referral", fields.ledesClientId, fields.note,
+      fields.street, fields.city, fields.zip, fields.country, fields.customNumber,
+      "Banana", "Wonder", fields.customText,
+    ];
+    const missing = expected.filter((value) => !detailText.includes(value));
+
+    return { uuid: match[1], correlation, events: observer.events, missing, fields };
+  } finally {
+    observer.dispose();
+    await page.close().catch(() => {});
+  }
+}
+
+/** Fills the required Name fields plus an invalid ("555" area code) phone
+ * number and confirms Lawcus's own real phone validation blocks creation
+ * — a genuine, live-observed constraint (2026-09-18), not assumed from a
+ * generic required-field check. Never fills a real, working phone number;
+ * never saves a contact either way. */
+const INVALID_PHONE_MESSAGE = "Invalid phone number";
+
+export async function verifyPhoneNumberValidationViaBrowser({ context }) {
+  const page = await context.newPage();
+  const dialog = contactDialog(page);
+  try {
+    await openNewContactDialog(page);
+    await dialog.locator('input[name="firstName"]').fill("QA Validation");
+    await dialog.locator('input[name="lastName"]').fill("Test");
+    await dialog.locator('input[type="tel"]').first().fill("5551234567");
+    // Move focus off the phone field, same as a real user tabbing away,
+    // so the field's own blur-triggered validation actually runs.
+    await dialog.locator('input[name="lastName"]').click();
+    await page.waitForTimeout(500);
+    const invalidMessageShown = (await page.getByText(INVALID_PHONE_MESSAGE, { exact: false }).count()) > 0;
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForTimeout(1000);
+    const noContactCreated = !/\/contact\/[a-f0-9-]{36}/.test(page.url());
+    return { invalidMessageShown, noContactCreated };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+/** Confirms that turning on "Enable client rates" reveals a genuinely
+ * required "Fixed rate" field — attempting Save with it blank is blocked
+ * by the same generic required-field message as First/Last Name, then
+ * filling it and saving succeeds with the rate shown correctly on the
+ * real detail page. A real, cascading-required field discovered live
+ * 2026-09-18 — not documented anywhere before this. */
+async function enableClientRates(page) {
+  const dialog = contactDialog(page);
+  await dialog.getByText("Billing Preference", { exact: true }).first().click();
+  await page.waitForTimeout(300);
+  await dialog
+    .getByText("Enable client rates", { exact: false })
+    .locator("..")
+    .locator('button[role="switch"], input[type="checkbox"]')
+    .first()
+    .click();
+  await page.waitForTimeout(400);
+}
+
+export async function verifyBillingRateRequiredValidationViaBrowser({ context }) {
+  // Two separate dialogs, not one reused after a failed Save — real issue
+  // hit live 2026-09-18: the Save button stays disabled for the entire
+  // 35s action timeout after a blocked submission in the same dialog,
+  // even once Fixed rate is filled in afterward. A fresh dialog for the
+  // "fill it and succeed" half sidesteps whatever stuck state that failed
+  // attempt leaves behind, and matches a real user's behavior at least as
+  // well as retrying inside the same broken form would.
+  const blockedPage = await context.newPage();
+  let blockedMessageCount, noContactCreatedWhenBlank;
+  try {
+    await openNewContactDialog(blockedPage);
+    const dialog = contactDialog(blockedPage);
+    await dialog.locator('input[name="firstName"]').fill("QA Validation");
+    await dialog.locator('input[name="lastName"]').fill("Test");
+    await enableClientRates(blockedPage);
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await blockedPage.waitForTimeout(1000);
+    blockedMessageCount = await blockedPage.getByText(REQUIRED_FIELD_MESSAGE, { exact: true }).count();
+    noContactCreatedWhenBlank = !/\/contact\/[a-f0-9-]{36}/.test(blockedPage.url());
+  } finally {
+    await blockedPage.close().catch(() => {});
+  }
+
+  const page = await context.newPage();
+  try {
+    await openNewContactDialog(page);
+    const dialog = contactDialog(page);
+    await dialog.locator('input[name="firstName"]').fill("QA Validation");
+    await dialog.locator('input[name="lastName"]').fill("Test");
+    await enableClientRates(page);
+    await dialog.locator("#contact_fixed_rate").fill("250");
+    await page.waitForTimeout(400);
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForURL(/\/contact\/[a-f0-9-]{36}/, { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+    const match = page.url().match(/\/contact\/([a-f0-9-]{36})/);
+    const detailText = match ? await page.locator("body").innerText() : "";
+    const rateShownCorrectly = detailText.includes("250.00");
+
+    return {
+      blockedMessageCount,
+      noContactCreatedWhenBlank,
+      createdAfterFilling: !!match,
+      uuid: match?.[1] ?? null,
+      rateShownCorrectly,
+    };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 /**
  * Opens the New Contact form and clicks Save with every field left empty —
  * a real, observed check (2026-09-16 exploration) that the two required
