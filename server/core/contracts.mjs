@@ -22,7 +22,9 @@ export const Plan = z
 export const PlanRequest = z
   .object({
     intent: z.string().trim().min(3).max(1000),
-    environmentId: z.enum(["fixture", "lawcus"]),
+    // V5 "add two more urls" (2026-09-17) — Co Server / Prod USA / Prod EU
+    // joined "fixture"/"lawcus" as real, live-verified Login-suite targets.
+    environmentId: z.enum(["fixture", "lawcus", "co-server", "prod-usa", "prod-eu"]),
     planner: z.enum(["ai", "standard"]).default("ai"),
   })
   .strict();

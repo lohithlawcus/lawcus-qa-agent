@@ -12,7 +12,7 @@ import { createOpenAIProvider } from './ai/providers/openai.mjs';
 import {keychain, readSecret} from './core/secrets.mjs';
 import {openEvidence} from './core/setup.mjs';
 import {readFile} from 'node:fs/promises';
-import {CredentialSetup,setupStatus,saveCredentials} from './core/setup.mjs';
+import {CredentialSetup,setupStatus,saveCredentials,ENVIRONMENT_ACCOUNTS} from './core/setup.mjs';
 import { createServer } from "node:http";
 import { createReadStream, mkdirSync } from "node:fs";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -174,6 +174,11 @@ const activeAuthoringSessions = new Map();
 const activeRuns = new Map();
 const sessions = new Map();
 const allowedOrigins = new Set(["http://127.0.0.1:5173"]);
+// V5 "add two more urls" (2026-09-17) — the real (non-fixture) Lawcus
+// environments the browser-driven Login suite (runLive) can target, derived
+// from the same map that already names each one's dedicated Keychain
+// account — one source of truth, not a second hardcoded list.
+const REAL_LOGIN_ENVIRONMENTS = new Set(Object.keys(ENVIRONMENT_ACCOUNTS));
 const limits = new Map();
 function json(res, status, data) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -570,7 +575,7 @@ const server = createServer(
         let result;
         planning=true;
         try {
-          result = input.environmentId==='lawcus'
+          result = REAL_LOGIN_ENVIRONMENTS.has(input.environmentId)
             ? input.planner==='standard'
               ? {plan:{title:'Login essentials',scenarios:['password_masked','empty_fields','valid_login','logout']},source:'standard',modelCalls:0}
               : routed?.matched
@@ -583,7 +588,7 @@ const server = createServer(
           1,
           input.environmentId,
           result.plan.title,
-          input.planner==='standard'&&input.environmentId==='lawcus' ? 'Standard staging login checks (no AI planning)' : input.intent,
+          input.planner==='standard'&&REAL_LOGIN_ENVIRONMENTS.has(input.environmentId) ? 'Standard staging login checks (no AI planning)' : input.intent,
           result.source,
           JSON.stringify(result.plan),
           now(),
@@ -618,7 +623,7 @@ const server = createServer(
           title: result.plan.title,
           scenarios: result.plan.scenarios.map((key) => ({
             key,
-            ...(input.environmentId==='lawcus'?liveDescriptions[key]:descriptions[key]),
+            ...(REAL_LOGIN_ENVIRONMENTS.has(input.environmentId)?liveDescriptions[key]:descriptions[key]),
           })),
           source: result.source,
         });
@@ -646,10 +651,10 @@ const server = createServer(
           json(res, 404, { error: "The saved test could not be found." });
           return;
         }
-        if(book.environment_id==='lawcus'){
+        if(REAL_LOGIN_ENVIRONMENTS.has(book.environment_id)){
           if(!browserStatus.ready){json(res,409,{error:'Check the browser connection in Environment first.'});return;}
-          const login=await keychain('exists','lawcus-login');if(!login.exists){json(res,409,{error:'Save your staging account in Environment first.'});return;}
-          const recent=db.prepare("SELECT COUNT(*) n FROM runs JOIN runbooks ON runbooks.id=runs.runbook_id WHERE runbooks.environment_id='lawcus' AND runs.started_at>?").get(new Date(Date.now()-600000).toISOString());
+          const login=await keychain('exists',ENVIRONMENT_ACCOUNTS[book.environment_id]);if(!login.exists){json(res,409,{error:'Save your staging account in Environment first.'});return;}
+          const recent=db.prepare("SELECT COUNT(*) n FROM runs JOIN runbooks ON runbooks.id=runs.runbook_id WHERE runbooks.environment_id=? AND runs.started_at>?").get(book.environment_id,new Date(Date.now()-600000).toISOString());
           if(recent.n>=3){json(res,429,{error:'Three staging runs were started in ten minutes. Please wait before more login attempts.'});return;}
         }else{validateExecution(db.prepare('SELECT * FROM environments WHERE id=?').get(book.environment_id));}
         if (connecting() || savingCredentials || checkingBrowser || db.prepare("SELECT 1 FROM runs WHERE status='running'").get()) {
@@ -712,7 +717,7 @@ const server = createServer(
             "INSERT INTO run_execution_manifests(run_id,manifest,created_at) VALUES(?,?,?)",
           ).run(id, JSON.stringify(manifest), now());
         audit("run.started", id, { runbookId: book.id, replay: !!previous });
-        const execute = book.environment_id === "lawcus" ? runLive : executeRun;
+        const execute = REAL_LOGIN_ENVIRONMENTS.has(book.environment_id) ? runLive : executeRun;
         const controller = book.environment_id === "fixture" ? new AbortController() : null;
         if (controller) activeRuns.set(id, controller);
         void execute({

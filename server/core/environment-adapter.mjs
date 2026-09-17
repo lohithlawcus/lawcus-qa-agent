@@ -23,6 +23,43 @@ export const STAGING = "https://lohith.fiveriverz.com";
 export const API_ORIGIN = "https://api.fiveriverz.com";
 export const ASSETS = "https://daewtpgqtk7am.cloudfront.net";
 
+// V5 "add two more urls" (2026-09-17) — real origins discovered live for
+// each of the 3 additional Lawcus environments (never assumed from naming
+// patterns; each was reached with a real login and its actual API/asset
+// hosts observed via Playwright network capture before being written here).
+// Same trust model as STAGING/API_ORIGIN/ASSETS above: a literal, reviewed
+// allowlist per environment, no wildcard/pattern matching, only the hosts
+// the app itself actually needs — third-party hosts seen alongside these
+// (Intercom, Google Analytics/Tag Manager, coview, ipinfo) are deliberately
+// excluded.
+export const ENVIRONMENT_ORIGINS = {
+  lawcus: { app: STAGING, api: API_ORIGIN, assets: [ASSETS], egressHosts: ["lohith.fiveriverz.com", "api.fiveriverz.com", "daewtpgqtk7am.cloudfront.net"] },
+  "co-server": {
+    app: "https://lohith.lawcus.co",
+    api: "https://api.lawcus.co",
+    assets: ["https://lawcus-assets.s3.amazonaws.com"],
+    egressHosts: ["lohith.lawcus.co", "api.lawcus.co", "lawcus-assets.s3.amazonaws.com"],
+  },
+  "prod-usa": {
+    app: "https://lohith.lawcus.com",
+    api: "https://api.us.lawcus.com",
+    assets: ["https://d3ik65nmn4gqxb.cloudfront.net", "https://lawcus-assets.s3.amazonaws.com"],
+    egressHosts: ["lohith.lawcus.com", "api.us.lawcus.com", "d3ik65nmn4gqxb.cloudfront.net", "lawcus-assets.s3.amazonaws.com"],
+  },
+  "prod-eu": {
+    app: "https://lohith.eu.lawcus.com",
+    api: "https://api.eu.lawcus.com",
+    assets: ["https://d3ik65nmn4gqxb.cloudfront.net", "https://lawcus-assets.s3.amazonaws.com"],
+    egressHosts: ["lohith.eu.lawcus.com", "api.eu.lawcus.com", "d3ik65nmn4gqxb.cloudfront.net", "lawcus-assets.s3.amazonaws.com"],
+  },
+};
+
+export function resolveEnvironmentOrigins(environmentId) {
+  const origins = ENVIRONMENT_ORIGINS[environmentId];
+  if (!origins) throw new Error(`Unknown environment "${environmentId}" for the staging runner.`);
+  return origins;
+}
+
 export class EnvironmentAdapterError extends Error {
   constructor(code, message) {
     super(message);

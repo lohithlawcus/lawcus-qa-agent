@@ -4,14 +4,14 @@ import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {readSecret} from './secrets.mjs';
 import {savePersonaState,loadPersonaState} from './persona-session.mjs';
-import {sealEvidence,saveCredentials,CredentialSetup} from './setup.mjs';
+import {sealEvidence,saveCredentials,CredentialSetup,ENVIRONMENT_ACCOUNTS} from './setup.mjs';
 import {startEgress} from './egress.mjs';
 import {Plan} from './contracts.mjs';
 import {now} from './store.mjs';
 // V5 Step 10 / section 20 — these origins now live in one place
 // (environment-adapter.mjs); re-exported here unchanged so nothing else
 // that already imports them from live-runner.mjs has to change.
-import {STAGING,API_ORIGIN,ASSETS} from './environment-adapter.mjs';
+import {STAGING,API_ORIGIN,ASSETS,ENVIRONMENT_ORIGINS,resolveEnvironmentOrigins} from './environment-adapter.mjs';
 export {STAGING,API_ORIGIN,ASSETS};
 import {attachNetworkObserver,correlateObservation} from './network-observer.mjs';
 import {attachRecorder} from './recorder.mjs';
@@ -36,13 +36,13 @@ export const liveDescriptions={
  invalid_password:{title:'Reject one incorrect password attempt',expected:'The login API denies the credentials, an error is shown, and the workspace remains unavailable.'},
  logout:{title:'Sign out of the test browser',expected:'After logout, this browser returns to login and cannot reopen the protected workspace. Server-wide token revocation is outside this check.'}
 };
-export function permitLiveRequest(url,method,resourceType){
+export function permitLiveRequest(url,method,resourceType,origins=ENVIRONMENT_ORIGINS.lawcus){
  let u;try{u=new URL(url);}catch{return false;}
  if(u.protocol!=='https:'||u.username||u.password||u.port)return false;
- if(u.origin===ASSETS)return ['GET','HEAD'].includes(method)&&['script','stylesheet','image','font','other'].includes(resourceType);
- if(![STAGING,API_ORIGIN].includes(u.origin))return false;
+ if(origins.assets.includes(u.origin))return ['GET','HEAD'].includes(method)&&['script','stylesheet','image','font','other'].includes(resourceType);
+ if(![origins.app,origins.api].includes(u.origin))return false;
  if(['GET','HEAD','OPTIONS'].includes(method))return true;
- return u.origin===API_ORIGIN&&method==='POST'&&['/login','/logout','/forcelogout'].includes(u.pathname);
+ return u.origin===origins.api&&method==='POST'&&['/login','/logout','/forcelogout'].includes(u.pathname);
 }
 // V5 Step 15 — a separate, narrower-than-you'd-think policy for Contacts
 // browser tests: everything permitLiveRequest already allows (GET reads
@@ -84,9 +84,9 @@ async function submitButton(page,saved){
  for(const value of names){const loc=locator(page,'button',value);const count=await loc.count();if(count>1)throw new Error('Ambiguous login action.');if(count===1&&await loc.isVisible()&&await loc.isEnabled())matches.push({loc,fingerprint:{kind:'button',value}});}
  if(matches.length!==1)throw new Error('The login action could not be resolved uniquely.');return matches[0];
 }
-async function assertIdentity(page,username){
+async function assertIdentity(page,username,appOrigin=STAGING){
  await page.getByPlaceholder('Search your practice',{exact:true}).waitFor({state:'visible'});
- if(new URL(page.url()).origin!==STAGING)throw new Error('The login left the authorized tenant.');
+ if(new URL(page.url()).origin!==appOrigin)throw new Error('The login left the authorized tenant.');
  let profile=page.getByRole('button').filter({has:page.locator('.MuiAvatar-root')});
  if(await profile.count()===0)profile=page.getByRole('button').filter({has:page.locator('img')});
  if(await profile.count()===0)profile=page.getByRole('button',{name:/^(open )?(profile|account|user) menu$/i});
@@ -98,12 +98,14 @@ async function assertIdentity(page,username){
 }
 export async function runLive({db,audit,runId,artifactDirectory,apiContracts,networkObservations,negativeAllowed=false}){
  const run=db.prepare('SELECT * FROM runs WHERE id=?').get(runId);const book=db.prepare('SELECT * FROM runbooks WHERE id=?').get(run.runbook_id);const plan=Plan.parse(JSON.parse(book.definition));
- if(book.environment_id!=='lawcus')throw new Error('Incorrect environment for the staging runner.');
+ const origins=resolveEnvironmentOrigins(book.environment_id);
+ const credentialAccount=ENVIRONMENT_ACCOUNTS[book.environment_id];
+ if(!credentialAccount)throw new Error('Incorrect environment for the staging runner.');
  if(plan.scenarios.includes('invalid_password')&&!negativeAllowed)throw new Error('Incorrect-password testing is not enabled.');
  let browser;let proxy;let failed=0;let authenticationBlocked=false;let path;const previous=run.path_id?db.prepare('SELECT * FROM execution_paths WHERE id=?').get(run.path_id):null;const old=previous?JSON.parse(previous.fingerprint):null;
  try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
+  const creds=JSON.parse(await readSecret(credentialAccount));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
+  proxy=await startEgress(origins.egressHosts);
   mkdirSync(artifactDirectory,{recursive:true,mode:0o700});
   for(const scenario of plan.scenarios){
    const id=randomUUID();const started=Date.now();const events=[];const blocked=new Set();let context;let page;let observer;let actual=liveDescriptions[scenario].expected;let status='passed';let healed=false;let candidate;let loginRequests=0;let loginStatus;let logoutRequested=false;let logoutRequests=0;let failureCategory='behavior-or-automation';
@@ -117,16 +119,24 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
     // never CI (CI's test:browser only exercises runner.mjs's fixture
     // path, never this function — confirmed, not assumed).
     browser=await launch(proxy,false);
-    context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:{width:1280,height:900}});context.setDefaultTimeout(12000);context.setDefaultNavigationTimeout(25000);
+    // Bumped from 12000 -> 35000 (2026-09-17): a real Co Server run's
+    // valid_login scenario failed to resolve the post-login identity within
+    // 12s, then a live diagnostic (same login, same account) confirmed the
+    // real Co Server dashboard reliably finishes loading well within 35s —
+    // the same cold-start lesson already applied to Contacts/Leads below
+    // ("Bumped from 20000 -> 35000"), just never carried over to this,
+    // the original login suite. Applies to every environment, not only the
+    // newer ones — Fiveriverz can hit the same cold-start delay.
+    context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:{width:1280,height:900}});context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
     observer=attachNetworkObserver(context);
     await context.routeWebSocket(/.*/,socket=>socket.close());
     await context.route('**/*',async route=>{const request=route.request();const url=new URL(request.url());
-     if(!permitLiveRequest(request.url(),request.method(),request.resourceType())){blocked.add([STAGING,API_ORIGIN,ASSETS].includes(url.origin)?'disallowed-method-or-resource':'unapproved-destination');await route.abort('blockedbyclient');return;}
-     if(request.method()==='POST'&&url.origin===API_ORIGIN&&['/logout','/forcelogout'].includes(url.pathname)){
+     if(!permitLiveRequest(request.url(),request.method(),request.resourceType(),origins)){blocked.add([origins.app,origins.api,...origins.assets].includes(url.origin)?'disallowed-method-or-resource':'unapproved-destination');await route.abort('blockedbyclient');return;}
+     if(request.method()==='POST'&&url.origin===origins.api&&['/logout','/forcelogout'].includes(url.pathname)){
       if(!logoutRequested||scenario!=='logout'||++logoutRequests>1){event('Unexpected logout submission','blocked');await route.abort('blockedbyclient');return;}
       event('Submit staging logout','one request');
      }
-     if(request.method()==='POST'&&url.origin===API_ORIGIN&&url.pathname==='/login'){
+     if(request.method()==='POST'&&url.origin===origins.api&&url.pathname==='/login'){
       loginRequests++;if(loginRequests>1||['empty_fields','password_masked'].includes(scenario)){event('Unexpected login submission','blocked');await route.abort('blockedbyclient');return;}
       if(scenario!=='invalid_password'){
        let payload;try{payload=request.postDataJSON();}catch{}
@@ -137,14 +147,14 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
      }
      await route.continue();
     });
-    page=await context.newPage();page.on('dialog',d=>void d.dismiss());page.on('response',async r=>{const u=new URL(r.url());if(u.origin===API_ORIGIN&&u.pathname==='/login'&&r.request().method()==='POST'){loginStatus=r.status();if(r.status()>=400&&scenario!=='invalid_password'){
+    page=await context.newPage();page.on('dialog',d=>void d.dismiss());page.on('response',async r=>{const u=new URL(r.url());if(u.origin===origins.api&&u.pathname==='/login'&&r.request().method()==='POST'){loginStatus=r.status();if(r.status()>=400&&scenario!=='invalid_password'){
       authenticationBlocked=true;
       try{const response=await r.json();const value=typeof response.error==='string'?response.error:'';event('Authentication rejection category',/credentials.*incorrect|incorrect.*credentials|invalid.*password|password.*incorrect/i.test(value)?'invalid-credentials':/captcha|bot|challenge/i.test(value)?'automation-challenge':/denied|forbidden/i.test(value)?'access-denied':'unclassified');}catch{event('Authentication rejection category','non-JSON response');}
      }}});
     event('Open staging login','requested');
-    await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});event('Open staging login','loaded');
+    await page.goto(origins.app+'/login',{waitUntil:'domcontentloaded'});event('Open staging login','loaded');
     const email=await field(page,'email',old?.email);const password=await field(page,'password',old?.password);const submit=await submitButton(page,old?.submit);
-    candidate={email:email.fingerprint,password:password.fingerprint,submit:submit.fingerprint,assertionContract:'staging-login-v1',origin:STAGING};
+    candidate={email:email.fingerprint,password:password.fingerprint,submit:submit.fingerprint,assertionContract:'staging-login-v1',origin:origins.app};
     if(scenario==='password_masked'){
      if(await password.loc.getAttribute('type')!=='password')throw new Error('The password is not masked.');event('Check password masking','passed');
     }else if(scenario==='empty_fields'){
@@ -154,18 +164,18 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
      if(loginRequests!==0||await password.loc.count()!==1||new URL(page.url()).pathname!=='/login')throw new Error('Empty credentials were submitted or no validation was observed.');event('Submit empty fields','validation shown without a network submission');
     }else{
      if(authenticationBlocked)throw new Error('An earlier authentication attempt failed; additional attempts are stopped.');
-     audit('login.attempt',runId,{scenario,environment:'lawcus'});
+     audit('login.attempt',runId,{scenario,environment:book.environment_id});
      await email.loc.fill(creds.username);await password.loc.fill(scenario==='invalid_password'?randomBytes(24).toString('hex'):creds.password);event('Fill dedicated account credentials','values withheld');
      await submit.loc.click();event('Submit login','one attempt');
      if(scenario==='invalid_password'){
       await page.getByRole('alert').filter({hasText:/credentials|password|access|incorrect/i}).waitFor();
       if(![400,401,403].includes(loginStatus))throw new Error('The API did not explicitly reject the credentials.');
-      await page.goto(STAGING+'/dashboard');await field(page,'password',candidate.password);
+      await page.goto(origins.app+'/dashboard');await field(page,'password',candidate.password);
       if(new URL(page.url()).pathname!=='/login')throw new Error('Protected content remained accessible.');event('Check denial','API denial and login page verified');
      }else{
-      await assertIdentity(page,creds.username);event('Verify authenticated account','dedicated QA identity matched');
+      await assertIdentity(page,creds.username,origins.app);event('Verify authenticated account','dedicated QA identity matched');
       if(scenario==='logout'){
-       const out=page.getByRole('menuitem',{name:'Logout',exact:true});logoutRequested=true;event('Choose logout','requested');await out.click();await field(page,'password',candidate.password);await page.goto(STAGING+'/dashboard');await field(page,'password',candidate.password);
+       const out=page.getByRole('menuitem',{name:'Logout',exact:true});logoutRequested=true;event('Choose logout','requested');await out.click();await field(page,'password',candidate.password);await page.goto(origins.app+'/dashboard');await field(page,'password',candidate.password);
        if(new URL(page.url()).pathname!=='/login')throw new Error('The test browser remained authenticated after logout.');event('Sign out and revisit protected route','login required');
       }else{await page.keyboard.press('Escape');}
      }
@@ -201,7 +211,7 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
    if(expectation&&observer){
     try{
      const contract=apiContracts.resolveApprovedContract(expectation.semanticId);
-     const result=correlateObservation({contract,events:observer.events,host:new URL(API_ORIGIN).hostname,cardinality:expectation.cardinality});
+     const result=correlateObservation({contract,events:observer.events,host:new URL(origins.api).hostname,cardinality:expectation.cardinality});
      pendingObservation={contractId:contract.id,semanticId:expectation.semanticId,expectedCardinality:expectation.cardinality,result};
      if(status==='passed'&&!result.contractMatch){failed++;status='failed';actual=`The UI behaved as expected, but the network check failed: ${result.mismatchReason}`;event('Network contract check',result.mismatchReason);}
      else event('Network contract check',result.contractMatch?'matched':'not verified (UI already failed)');
@@ -232,11 +242,11 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
    if(pendingObservation)networkObservations.record({runId,scenarioResultId:id,stepLabel:scenario,...pendingObservation});
    if(observer?.consoleEntries.length)networkObservations.recordConsoleEntries({runId,scenarioResultId:id,entries:observer.consoleEntries});
   }
-  if(!failed&&path&&(!old||JSON.stringify(path)!==JSON.stringify(old))){const id=randomUUID();const version=(db.prepare('SELECT MAX(version) v FROM execution_paths WHERE runbook_id=?').get(book.id).v||0)+1;db.prepare('INSERT INTO execution_paths VALUES(?,?,?,?,?)').run(id,book.id,version,JSON.stringify(path),now());audit('path.saved',id,{version,environment:'lawcus'});}
+  if(!failed&&path&&(!old||JSON.stringify(path)!==JSON.stringify(old))){const id=randomUUID();const version=(db.prepare('SELECT MAX(version) v FROM execution_paths WHERE runbook_id=?').get(book.id).v||0)+1;db.prepare('INSERT INTO execution_paths VALUES(?,?,?,?,?)').run(id,book.id,version,JSON.stringify(path),now());audit('path.saved',id,{version,environment:book.environment_id});}
   db.prepare('UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?').run(failed?'failed':'passed',now(),`${plan.scenarios.length} staging checks completed. ${plan.scenarios.length-failed} passed; ${failed} need review. ${run.replay?'Saved semantic path replayed.':'First staging execution.'} Zero model calls during browser execution. Evidence is encrypted locally.`,runId);
-  audit('run.completed',runId,{environment:'lawcus',failed,checks:plan.scenarios.length});
+  audit('run.completed',runId,{environment:book.environment_id,failed,checks:plan.scenarios.length});
  }catch{
-  db.prepare("UPDATE runs SET status='interrupted',finished_at=?,summary=? WHERE id=?").run(now(),'The staging run could not start or complete. Check the local runner, macOS Keychain permission and network connection. No pass is claimed.',runId);audit('run.interrupted',runId,{environment:'lawcus'});
+  db.prepare("UPDATE runs SET status='interrupted',finished_at=?,summary=? WHERE id=?").run(now(),'The staging run could not start or complete. Check the local runner, macOS Keychain permission and network connection. No pass is claimed.',runId);audit('run.interrupted',runId,{environment:book.environment_id});
  }finally{await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});}
 }
 
