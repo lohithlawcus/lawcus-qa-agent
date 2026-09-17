@@ -890,6 +890,14 @@ const server = createServer(
       // closed on a broken batch, never a partial import). Every item and
       // edge that does get proposed lands as pending_review exactly like
       // the seed file's items always have — nothing here is auto-approved.
+      //
+      // proposeItem()/proposeEdge() are each a separate write, so a later
+      // item failing (e.g. a Related Tests id that doesn't really exist —
+      // knowledge_item_tests has a real FK to test_cases) would otherwise
+      // leave the earlier items in this same batch already committed,
+      // silently breaking the "never a partial import" guarantee above.
+      // Real bug, caught live 2026-09-18 testing this exact endpoint.
+      // Wrapping the whole batch in one transaction makes it atomic.
       if (req.method === "POST" && pathname === "/knowledge/import") {
         const input = KnowledgeImportRequest.parse(await body(req, 200000));
         const { items, edges, errors } = parseKnowledgeMarkdown(input.text);
@@ -897,8 +905,29 @@ const server = createServer(
           json(res, 400, { errors });
           return;
         }
-        const proposedItems = items.map((item) => knowledge.proposeItem(item));
-        const proposedEdges = edges.map((edge) => knowledge.proposeEdge(edge));
+        db.exec("BEGIN IMMEDIATE");
+        let proposedItems, proposedEdges;
+        try {
+          proposedItems = items.map((item) => knowledge.proposeItem(item));
+          proposedEdges = edges.map((edge) => knowledge.proposeEdge(edge));
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          const fkError = error instanceof Error && /FOREIGN KEY constraint failed/.test(error.message);
+          json(res, 400, {
+            errors: [
+              {
+                line: 0,
+                message: fkError
+                  ? "One item cites a Related Test or API Contract id that doesn't actually exist. Fix or remove that reference — nothing was imported."
+                  : error instanceof Error
+                    ? error.message
+                    : "Import failed.",
+              },
+            ],
+          });
+          return;
+        }
         audit("knowledge.bulk_import", randomUUID(), {
           items: proposedItems.length,
           edges: proposedEdges.length,

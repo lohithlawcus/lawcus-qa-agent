@@ -23,6 +23,10 @@ Rules:
 - Any typo, unknown type, invalid semantic ID, or bad Provenance value fails
   the *entire* import with a line number — nothing partial ever gets
   proposed.
+- `Related Tests` must name a TestBook case that already exists (a real
+  foreign key, unlike every other field here) — an unknown one fails the
+  whole import too, just without a line number, since that check only
+  happens once everything else has already parsed correctly.
 
 ---
 
@@ -37,8 +41,6 @@ Does Not Mean: This does not require the timekeeper to have logged any billable 
 Applies To: existing_matter
 Source Title: Lawcus Support — Billing overview
 Source URL: https://support.lawcus.com/en/articles/example-billing-overview
-Related Tests: billing.invoice_requires_timekeeper
-API Contracts: lawcus.billing.create_invoice
 Release: 2026.09
 
 ### FIELD_RULE: FIELD-BILLING-INVOICE-NUMBER-UNIQUE-001

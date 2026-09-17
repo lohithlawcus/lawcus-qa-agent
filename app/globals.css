@@ -452,6 +452,52 @@ p {
   border: 1px solid #dce4ec;
   border-radius: 11px;
 }
+.panel-highlight {
+  border-color: var(--primary);
+  border-left-width: 4px;
+  background: var(--accent);
+}
+.panel-highlight .section-label {
+  color: var(--accent-foreground);
+}
+.format-guide {
+  margin-top: 14px;
+  border: 1px solid #dce4ec;
+  border-radius: 9px;
+  background: #fff;
+}
+.format-guide-example {
+  background: #f7f9fb;
+  border: 1px solid #dce4ec;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  color: #223852;
+}
+.knowledge-summary {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.knowledge-summary-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.knowledge-summary-stat strong {
+  font-size: 22px;
+  color: #15253b;
+}
+.knowledge-summary-stat span {
+  font-size: 12px;
+  color: #687c8e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
 .panel-heading {
   display: flex;
   justify-content: space-between;

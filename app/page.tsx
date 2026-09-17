@@ -373,6 +373,20 @@ const date = (s: string) =>
     hour: "2-digit",
     minute: "2-digit",
   });
+const EXAMPLE_KNOWLEDGE_TEXT = `## Feature: Billing
+Description: Invoicing, time entries and payments for a matter.
+
+### BUSINESS_RULE: BR-BILLING-EXAMPLE-001
+Title: An invoice needs at least one timekeeper on the matter
+Provenance: DOCUMENTED
+Statement: A matter must have at least one timekeeper assigned before an invoice can be generated for it.
+Applies To: existing_matter
+
+### EDGE: DEPENDS_ON
+From: Billing
+To: Contacts
+Rationale: An invoice is always billed to a Contact record.
+`;
 export default function Home() {
   const [tab, setTab] = useState("workspace");
   const [state, setState] = useState<State | null>(null);
@@ -762,6 +776,10 @@ export default function Home() {
   const pendingKnowledgeItems = state?.knowledgeInbox.items || [];
   const pendingKnowledgeEdges = state?.knowledgeInbox.edges || [];
   const pendingKnowledgeCount = pendingKnowledgeItems.length + pendingKnowledgeEdges.length;
+  const approvedKnowledgeCount = (state?.knowledgeApproved || []).reduce(
+    (sum, group) => sum + group.items.length,
+    0,
+  );
   const pendingApiContracts = state?.apiContractsInbox || [];
   const pendingEnvironmentAdapters = state?.environmentAdaptersInbox || [];
   const pendingNetworkAuthorities = state?.networkAuthoritiesInbox || [];
@@ -1593,6 +1611,81 @@ export default function Home() {
             </div>
           </TabsContent>
           <TabsContent value="knowledge">
+            <div className="knowledge-summary">
+              <div className="knowledge-summary-stat">
+                <strong>{pendingKnowledgeCount}</strong>
+                <span>Pending review</span>
+              </div>
+              <div className="knowledge-summary-stat">
+                <strong>{approvedKnowledgeCount}</strong>
+                <span>Approved</span>
+              </div>
+            </div>
+            <div className="panel question-panel panel-highlight">
+              <div className="panel-heading">
+                <span className="section-label">ADD KNOWLEDGE</span>
+                <Lightbulb />
+              </div>
+              <p className="subtle">
+                Paste business rules, field rules, dependencies and other Knowledge in one go — each
+                one lands in the inbox below as pending review, exactly like a single proposal.
+                Nothing here is ever auto-approved.
+              </p>
+              <Accordion type="single" collapsible className="format-guide">
+                <AccordionItem value="format-guide">
+                  <AccordionTrigger style={{ padding: "10px 14px" }}>
+                    How do I format this?
+                  </AccordionTrigger>
+                  <AccordionContent style={{ padding: "0 14px 14px" }}>
+                    <p className="subtle" style={{ marginBottom: 10 }}>
+                      One field per line, no multi-line values. <code>## Feature:</code> starts a
+                      group (needs a <code>Description:</code> the first time it appears);{" "}
+                      <code>### TYPE: SEMANTIC-ID</code> starts one item;{" "}
+                      <code>### EDGE: TYPE</code> links two existing features.
+                    </p>
+                    <div className="format-guide-example">{EXAMPLE_KNOWLEDGE_TEXT}</div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+              <Textarea
+                rows={10}
+                placeholder={EXAMPLE_KNOWLEDGE_TEXT}
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+                style={{ marginTop: 12, fontFamily: "monospace", fontSize: 13 }}
+              />
+              <div className="inline" style={{ marginTop: 12 }}>
+                <Button disabled={importBusy || !importText.trim()} onClick={() => void importKnowledge()}>
+                  {importBusy ? <LoaderCircle className="spin" /> : <Lightbulb />}
+                  Import
+                </Button>
+                <Button variant="outline" disabled={importBusy} onClick={() => setImportText(EXAMPLE_KNOWLEDGE_TEXT)}>
+                  Load example
+                </Button>
+              </div>
+              {importResult && (
+                <p className="notice" role="status" style={{ marginTop: 12 }}>
+                  Proposed {importResult.items} Knowledge item{importResult.items === 1 ? "" : "s"}
+                  {importResult.edges > 0
+                    ? ` and ${importResult.edges} relationship${importResult.edges === 1 ? "" : "s"}`
+                    : ""}
+                  . Review {importResult.items === 1 ? "it" : "them"} below.
+                </p>
+              )}
+              {importErrors.length > 0 && (
+                <div className="notice error" role="alert" style={{ marginTop: 12 }}>
+                  <p>Nothing was imported — fix these and try again:</p>
+                  <ul>
+                    {importErrors.map((err, i) => (
+                      <li key={i}>
+                        {err.line > 0 ? `Line ${err.line}: ` : ""}
+                        {err.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
             <div className="panel question-panel">
               <span className="section-label">KNOWLEDGE INBOX</span>
               {!pendingKnowledgeItems.length && !pendingKnowledgeEdges.length ? (
@@ -1774,50 +1867,6 @@ export default function Home() {
                 ))}
               </div>
             ) : null}
-            <div className="panel question-panel">
-              <span className="section-label">BULK-IMPORT KNOWLEDGE</span>
-              <p className="subtle">
-                Paste business rules, field rules, dependencies and other Knowledge in one go — each
-                one still lands in the inbox above as pending review, exactly like a single proposal.
-                Nothing here is ever auto-approved.
-              </p>
-              <Textarea
-                rows={10}
-                placeholder={
-                  "## Feature: Billing\nDescription: Invoicing, time entries and payments for a matter.\n\n### BUSINESS_RULE: BR-BILLING-EXAMPLE-001\nTitle: ...\nProvenance: DOCUMENTED\nStatement: ..."
-                }
-                value={importText}
-                onChange={(e) => setImportText(e.target.value)}
-                style={{ marginTop: 12, fontFamily: "monospace", fontSize: 13 }}
-              />
-              <Button
-                style={{ marginTop: 12 }}
-                disabled={importBusy || !importText.trim()}
-                onClick={() => void importKnowledge()}
-              >
-                {importBusy ? <LoaderCircle className="spin" /> : <Lightbulb />}
-                Import
-              </Button>
-              {importResult && (
-                <p className="notice" role="status" style={{ marginTop: 12 }}>
-                  Proposed {importResult.items} Knowledge item{importResult.items === 1 ? "" : "s"}
-                  {importResult.edges > 0
-                    ? ` and ${importResult.edges} relationship${importResult.edges === 1 ? "" : "s"}`
-                    : ""}
-                  . Review them above.
-                </p>
-              )}
-              {importErrors.length > 0 && (
-                <div className="notice error" role="alert" style={{ marginTop: 12 }}>
-                  <p>Nothing was imported — fix these and try again:</p>
-                  <ul>
-                    {importErrors.map((err, i) => (
-                      <li key={i}>{err.line > 0 ? `Line ${err.line}: ` : ""}{err.message}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
           </TabsContent>
           <TabsContent value="api">
             <div className="panel question-panel">
