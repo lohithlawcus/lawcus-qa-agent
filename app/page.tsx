@@ -388,6 +388,10 @@ export default function Home() {
   const [personaConnection, setPersonaConnection] = useState<{ status: string; message: string } | null>(null);
   const [personaForm, setPersonaForm] = useState({ role: "admin", label: "", credentialAccount: "lawcus-persona-admin" });
   const [authoringForm, setAuthoringForm] = useState({ environmentId: "fixture", featureName: "", workflowDescription: "" });
+  const [importText, setImportText] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importErrors, setImportErrors] = useState<{ line: number; message: string }[]>([]);
+  const [importResult, setImportResult] = useState<{ items: number; edges: number } | null>(null);
   const [activeAuthoringSession, setActiveAuthoringSession] = useState<AuthoringSession | null>(null);
   const [authoringLiveCount, setAuthoringLiveCount] = useState(0);
   const [impactedPlan, setImpactedPlan] = useState<ImpactedPlan | null>(null);
@@ -574,6 +578,41 @@ export default function Home() {
       );
       await refresh();
     });
+  }
+  async function importKnowledge(retry = true): Promise<void> {
+    setImportBusy(true);
+    setImportErrors([]);
+    setImportResult(null);
+    try {
+      const res = await fetch(API + "/knowledge/import", {
+        method: "POST",
+        credentials: "include",
+        headers: { "X-QA-Client": "lawcus-workspace", "Content-Type": "application/json" },
+        body: JSON.stringify({ text: importText }),
+      });
+      if (res.status === 401 && retry) {
+        await request("/session", {});
+        return importKnowledge(false);
+      }
+      const data = (await res.json()) as {
+        proposed?: { items: { semanticId: string; version: number }[]; edges: number };
+        errors?: { line: number; message: string }[];
+        error?: string;
+      };
+      if (!res.ok) {
+        setImportErrors(data.errors?.length ? data.errors : [{ line: 0, message: data.error || "Import failed." }]);
+        return;
+      }
+      if (data.proposed) {
+        setImportResult({ items: data.proposed.items.length, edges: data.proposed.edges });
+        setImportText("");
+        await refresh();
+      }
+    } catch (e) {
+      setImportErrors([{ line: 0, message: e instanceof Error ? e.message : "Import failed." }]);
+    } finally {
+      setImportBusy(false);
+    }
   }
   async function decideApiRecord(
     kind: "api-contracts" | "environment-adapters" | "network-authorities",
@@ -1735,6 +1774,50 @@ export default function Home() {
                 ))}
               </div>
             ) : null}
+            <div className="panel question-panel">
+              <span className="section-label">BULK-IMPORT KNOWLEDGE</span>
+              <p className="subtle">
+                Paste business rules, field rules, dependencies and other Knowledge in one go — each
+                one still lands in the inbox above as pending review, exactly like a single proposal.
+                Nothing here is ever auto-approved.
+              </p>
+              <Textarea
+                rows={10}
+                placeholder={
+                  "## Feature: Billing\nDescription: Invoicing, time entries and payments for a matter.\n\n### BUSINESS_RULE: BR-BILLING-EXAMPLE-001\nTitle: ...\nProvenance: DOCUMENTED\nStatement: ..."
+                }
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+                style={{ marginTop: 12, fontFamily: "monospace", fontSize: 13 }}
+              />
+              <Button
+                style={{ marginTop: 12 }}
+                disabled={importBusy || !importText.trim()}
+                onClick={() => void importKnowledge()}
+              >
+                {importBusy ? <LoaderCircle className="spin" /> : <Lightbulb />}
+                Import
+              </Button>
+              {importResult && (
+                <p className="notice" role="status" style={{ marginTop: 12 }}>
+                  Proposed {importResult.items} Knowledge item{importResult.items === 1 ? "" : "s"}
+                  {importResult.edges > 0
+                    ? ` and ${importResult.edges} relationship${importResult.edges === 1 ? "" : "s"}`
+                    : ""}
+                  . Review them above.
+                </p>
+              )}
+              {importErrors.length > 0 && (
+                <div className="notice error" role="alert" style={{ marginTop: 12 }}>
+                  <p>Nothing was imported — fix these and try again:</p>
+                  <ul>
+                    {importErrors.map((err, i) => (
+                      <li key={i}>{err.line > 0 ? `Line ${err.line}: ` : ""}{err.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </TabsContent>
           <TabsContent value="api">
             <div className="panel question-panel">

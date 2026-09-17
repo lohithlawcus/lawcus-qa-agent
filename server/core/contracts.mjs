@@ -40,6 +40,9 @@ export const DecisionRequest = z
 export const ImpactedTestRequest = z
   .object({ intent: z.string().trim().min(3).max(1000) })
   .strict();
+export const KnowledgeImportRequest = z
+  .object({ text: z.string().min(1).max(200000) })
+  .strict();
 export const AiGateToggleRequest = z.object({ enabled: z.boolean() }).strict();
 export const descriptions = {
   valid_login: {

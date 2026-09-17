@@ -52,6 +52,8 @@ export const TYPE_PREFIXES = {
   EDGE_CASE: "EDGE",
 };
 
+export const PROVENANCE_VALUES = ["PRODUCT_APPROVED", "DOCUMENTED", "OBSERVED", "INFERRED", "ASSUMED", "DEPRECATED"];
+
 export function validateSemanticId(type, semanticId) {
   const prefix = TYPE_PREFIXES[type];
   if (!prefix) throw new KnowledgeError("unknown_type", `Unknown Knowledge type: ${type}`);
