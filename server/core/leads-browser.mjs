@@ -184,6 +184,14 @@ export async function updateLeadCustomFieldViaBrowser({ context, apiContracts, u
     await page.goto(`${STAGING}/lead/${uuid}`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2000);
     await openEditMatterCustomFields(page);
+    // Unlike Contacts, Lawcus's Leads/matter update API takes an explicit
+    // empty string as "set this field to blank" — confirmed live
+    // 2026-09-18 by inspecting the real PUT payload: filling '' sends
+    // {team_custom_field_id, value:""} and the field genuinely clears.
+    // Removing the field from the form instead (Contacts' fix) is wrong
+    // here: it just omits the field from the payload, which this API
+    // treats as "leave it unchanged," not "clear it" — tried and reverted
+    // the same day it was added.
     await ensureFieldOnForm(page, fieldName);
     const valueInput = fieldValueInput(page, fieldName);
     await valueInput.click();

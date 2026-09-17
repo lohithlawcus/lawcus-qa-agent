@@ -25,11 +25,13 @@ import {
   AnswerRequest,
   DecisionRequest,
   ImpactedTestRequest,
+  KnowledgeImportRequest,
   AiGateToggleRequest,
   createPlan,
   validateExecution,
   descriptions,
 } from "./core/contracts.mjs";
+import { parseKnowledgeMarkdown } from "./core/knowledge-import.mjs";
 import { executeRun, loginTestCases } from "./core/runner.mjs";
 import { openProposals } from "./core/proposals.mjs";
 import { openTestBook } from "./core/testbook.mjs";
@@ -203,11 +205,11 @@ function same(a, b) {
     timingSafeEqual(Buffer.from(a), Buffer.from(b))
   );
 }
-async function body(req) {
+async function body(req, maxBytes = 12000) {
   let raw = "";
   for await (const chunk of req) {
     raw += chunk;
-    if (Buffer.byteLength(raw) > 12000)
+    if (Buffer.byteLength(raw) > maxBytes)
       throw new Error("Request is too large.");
   }
   return JSON.parse(raw || "{}");
@@ -880,6 +882,62 @@ const server = createServer(
             ? knowledge.approveEdge(id, approverIdentity, input.note ?? null)
             : knowledge.rejectEdge(id, approverIdentity, input.note ?? null);
         json(res, 200, { status: result.status });
+        return;
+      }
+      // V5 "efficiently update our knowledge base" (2026-09-18) — bulk
+      // authoring: parses a whole document of Knowledge items/edges at
+      // once, but proposes NOTHING if any of it fails to parse (fail
+      // closed on a broken batch, never a partial import). Every item and
+      // edge that does get proposed lands as pending_review exactly like
+      // the seed file's items always have — nothing here is auto-approved.
+      //
+      // proposeItem()/proposeEdge() are each a separate write, so a later
+      // item failing (e.g. a Related Tests id that doesn't really exist —
+      // knowledge_item_tests has a real FK to test_cases) would otherwise
+      // leave the earlier items in this same batch already committed,
+      // silently breaking the "never a partial import" guarantee above.
+      // Real bug, caught live 2026-09-18 testing this exact endpoint.
+      // Wrapping the whole batch in one transaction makes it atomic.
+      if (req.method === "POST" && pathname === "/knowledge/import") {
+        const input = KnowledgeImportRequest.parse(await body(req, 200000));
+        const { items, edges, errors } = parseKnowledgeMarkdown(input.text);
+        if (errors.length) {
+          json(res, 400, { errors });
+          return;
+        }
+        db.exec("BEGIN IMMEDIATE");
+        let proposedItems, proposedEdges;
+        try {
+          proposedItems = items.map((item) => knowledge.proposeItem(item));
+          proposedEdges = edges.map((edge) => knowledge.proposeEdge(edge));
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          const fkError = error instanceof Error && /FOREIGN KEY constraint failed/.test(error.message);
+          json(res, 400, {
+            errors: [
+              {
+                line: 0,
+                message: fkError
+                  ? "One item cites a Related Test or API Contract id that doesn't actually exist. Fix or remove that reference — nothing was imported."
+                  : error instanceof Error
+                    ? error.message
+                    : "Import failed.",
+              },
+            ],
+          });
+          return;
+        }
+        audit("knowledge.bulk_import", randomUUID(), {
+          items: proposedItems.length,
+          edges: proposedEdges.length,
+        });
+        json(res, 200, {
+          proposed: {
+            items: proposedItems.map((i) => ({ semanticId: i.semantic_id, version: i.version })),
+            edges: proposedEdges.length,
+          },
+        });
         return;
       }
       // V5 Step 16 — Natural-Language Impacted Testing (section 42's flow):
