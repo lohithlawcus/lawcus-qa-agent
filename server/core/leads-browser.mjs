@@ -52,33 +52,6 @@ function fieldValueInput(page, fieldName) {
   return page.locator(`text=${fieldName}`).locator("..").locator('input[type="text"]').first();
 }
 
-/** Removes a matter custom field from the currently-open Step 2 form via
- * its own (x) control — the real inverse of ensureFieldOnForm's
- * search-to-add. Mirrors contacts-browser.mjs's removeFieldFromForm (same
- * shared component, same "blanking text doesn't persist as cleared"
- * behavior, confirmed live 2026-09-18 on this form too). Anchored on the
- * value input's own element, not the field's label text. No-ops if the
- * row can't be found. */
-async function removeFieldFromForm(page, valueInputLocator) {
-  const inputHandle = await valueInputLocator.elementHandle();
-  if (!inputHandle) return false;
-  const removeHandle = await page.evaluateHandle((input) => {
-    let row = input;
-    for (let i = 0; i < 6 && row.parentElement; i++) {
-      row = row.parentElement;
-      const btn = Array.from(row.querySelectorAll("button, [role='button']")).find((b) =>
-        b.className.includes("deleteIconBtn"),
-      );
-      if (btn) return btn;
-    }
-    return null;
-  }, inputHandle);
-  const removeElement = removeHandle.asElement();
-  if (!removeElement) return false;
-  await removeElement.click();
-  return true;
-}
-
 /** Opens the New Lead wizard's Step 1 (Add potential client) from the
  * Leads list — shared by every create/validate case below. Real, observed
  * 2026-09-16: Step 1 defaults to Person, and also offers Company and
@@ -211,18 +184,18 @@ export async function updateLeadCustomFieldViaBrowser({ context, apiContracts, u
     await page.goto(`${STAGING}/lead/${uuid}`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2000);
     await openEditMatterCustomFields(page);
-    if (newValue === "") {
-      // Restoring to "unset" — see removeFieldFromForm's comment. A no-op
-      // if the field isn't on the form at all (already unset).
-      if ((await page.getByText(fieldName, { exact: true }).count()) > 0) {
-        await removeFieldFromForm(page, fieldValueInput(page, fieldName));
-      }
-    } else {
-      await ensureFieldOnForm(page, fieldName);
-      const valueInput = fieldValueInput(page, fieldName);
-      await valueInput.click();
-      await valueInput.fill(newValue);
-    }
+    // Unlike Contacts, Lawcus's Leads/matter update API takes an explicit
+    // empty string as "set this field to blank" — confirmed live
+    // 2026-09-18 by inspecting the real PUT payload: filling '' sends
+    // {team_custom_field_id, value:""} and the field genuinely clears.
+    // Removing the field from the form instead (Contacts' fix) is wrong
+    // here: it just omits the field from the payload, which this API
+    // treats as "leave it unchanged," not "clear it" — tried and reverted
+    // the same day it was added.
+    await ensureFieldOnForm(page, fieldName);
+    const valueInput = fieldValueInput(page, fieldName);
+    await valueInput.click();
+    await valueInput.fill(newValue);
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await page.waitForTimeout(2500);
     await observer.settle();
