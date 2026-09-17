@@ -348,7 +348,7 @@ const server = createServer(
         // after Playwright itself confirms the resulting identity.
         if(input.kind==='lawcus-persona'){json(res,400,{error:'Persona accounts must be verified through visible sign-in, not saved directly.'});return;}
         if(connecting()||savingCredentials||db.prepare("SELECT 1 FROM runs WHERE status='running'").get()){json(res,409,{error:'Wait for the active operation before changing credentials.'});return;}
-        savingCredentials=true;try{const result=await saveCredentials(input);audit('setup.credential-saved',input.kind,{storage:'macOS Keychain'});json(res,200,result);}finally{savingCredentials=false;}return;
+        savingCredentials=true;try{const result=await saveCredentials(input);audit('setup.credential-saved',input.kind,{storage:'macOS Keychain',...(input.kind==='lawcus'?{environmentId:input.environmentId}:input.kind==='lawcus-persona'?{account:input.account}:{})});json(res,200,result);}finally{savingCredentials=false;}return;
       }
       if(req.method==='POST'&&pathname==='/personas'){
         const input=PersonaRegistration.parse(await body(req));
