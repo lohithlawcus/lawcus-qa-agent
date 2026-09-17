@@ -49,6 +49,37 @@ async function ensureFieldOnForm(page, fieldName) {
   await page.waitForTimeout(500);
 }
 
+/** Removes a custom field from the currently-open edit form via its own
+ * (x) control — the real inverse of ensureFieldOnForm's search-to-add, and
+ * NOT the same as blanking its text input. Live-verified 2026-09-18 on a
+ * real leftover contact: filling '' and clicking Update does not persist
+ * as "cleared" in this tenant — the field's last real value stays saved
+ * server-side. Un-setting a field (restoring it to how it looked before
+ * any test touched it) must go through this control instead. Anchored on
+ * the value input's own element, not the field's label text, since a
+ * label-text search can resolve to an unrelated same-named node elsewhere
+ * in the DOM (hit live while diagnosing this). No-ops if the row can't be
+ * found (already removed, or a field with no delete control). */
+async function removeFieldFromForm(page, valueInputLocator) {
+  const inputHandle = await valueInputLocator.elementHandle();
+  if (!inputHandle) return false;
+  const removeHandle = await page.evaluateHandle((input) => {
+    let row = input;
+    for (let i = 0; i < 6 && row.parentElement; i++) {
+      row = row.parentElement;
+      const btn = Array.from(row.querySelectorAll("button, [role='button']")).find((b) =>
+        b.className.includes("deleteIconBtn"),
+      );
+      if (btn) return btn;
+    }
+    return null;
+  }, inputHandle);
+  const removeElement = removeHandle.asElement();
+  if (!removeElement) return false;
+  await removeElement.click();
+  return true;
+}
+
 /** Opens the New Contact dialog from the Contacts list — shared by every
  * create/validate case below (Person and Company alike). */
 async function openNewContactDialog(page) {
@@ -256,10 +287,18 @@ export async function updateContactCustomFieldViaBrowser({ context, apiContracts
     await page.goto(`${STAGING}/contact/${uuid}`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2000);
     await openEditCustomFields(page);
-    await ensureFieldOnForm(page, fieldName);
-    const valueInput = page.locator('input[type="text"]').last();
-    await valueInput.click();
-    await valueInput.fill(newValue);
+    if (newValue === "") {
+      // Restoring to "unset" — see removeFieldFromForm's comment. A no-op
+      // if the field isn't on the form at all (already unset).
+      if ((await page.getByText(fieldName, { exact: true }).count()) > 0) {
+        await removeFieldFromForm(page, page.locator('input[type="text"]').last());
+      }
+    } else {
+      await ensureFieldOnForm(page, fieldName);
+      const valueInput = page.locator('input[type="text"]').last();
+      await valueInput.click();
+      await valueInput.fill(newValue);
+    }
     await page.getByRole("button", { name: "Update", exact: true }).click();
     await page.waitForTimeout(2500);
     await observer.settle();
