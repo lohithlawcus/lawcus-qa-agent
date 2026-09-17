@@ -445,12 +445,15 @@ export async function startAuthoringSession({environmentId,origin,personaId=null
 // helpers), then hands off to contacts-browser.mjs for the actual
 // update/verify/restore cycle. Uses permitContactsRequest — NOT
 // permitLiveRequest — so the login suite's own policy is untouched.
+// Headed, not headless (2026-09-17) — every function below this point was
+// still launching invisibly; the user asked to watch these run too, same
+// as runLive()'s own headed launch above.
 export async function runContactCustomFieldCheck({apiContracts,mutationJournal,runId,uuid,fieldName,newValue,primitiveId='contacts.update_custom_field_via_browser'}){
  let browser,proxy,context;
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy);
+  browser=await launch(proxy,false);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
   // Bumped from 20000 -> 35000 (2026-09-16): two real staging runs each
   // showed the FIRST real login of a rapid back-to-back batch timing out
@@ -485,7 +488,7 @@ export async function runLeadCustomFieldCheck({apiContracts,mutationJournal,runI
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy);
+  browser=await launch(proxy,false);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:LEADS_VIEWPORT});
   // Bumped from 20000 -> 35000 (2026-09-16) — see the identical comment in
   // runContactCustomFieldCheck above.
@@ -517,7 +520,7 @@ export async function runContactCreationCheck({apiContracts,firstName,lastName})
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy);
+  browser=await launch(proxy,false);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
   // Bumped from 20000 -> 35000 (2026-09-16) — see the identical comment in
   // runContactCustomFieldCheck above.
@@ -550,7 +553,7 @@ export async function runContactMandatoryFieldValidationCheck(){
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy);
+  browser=await launch(proxy,false);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
@@ -579,7 +582,7 @@ export async function runContactCompanyCreationCheck({apiContracts,name}){
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy);
+  browser=await launch(proxy,false);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
@@ -606,7 +609,7 @@ export async function runContactCompanyMandatoryFieldValidationCheck(){
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy);
+  browser=await launch(proxy,false);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
@@ -633,7 +636,7 @@ export async function runLeadCreationCheck({apiContracts,firstName,lastName,matt
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy);
+  browser=await launch(proxy,false);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:LEADS_VIEWPORT});
   // Bumped from 20000 -> 35000 (2026-09-16) — see the identical comment in
   // runContactCustomFieldCheck above.
@@ -665,7 +668,7 @@ export async function runLeadMandatoryFieldValidationCheck(){
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy);
+  browser=await launch(proxy,false);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:LEADS_VIEWPORT});
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
