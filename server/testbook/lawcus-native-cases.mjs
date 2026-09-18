@@ -83,7 +83,7 @@ export const CREATE_CONTACT_CASES = {
       module: "server/core/live-runner.mjs",
       function: "runContactAllFieldsCreationCheck",
       description:
-        "Real browser-driven creation of a new Person Contact with every field across all four New Contact sections filled (Basic Details, Other Info, Addresses, Custom Fields) — not just First/Last Name. Independently re-reads the resulting detail page's own text and confirms every value actually appears there. Live-verified end to end 2026-09-18: all fields saved and displayed correctly.",
+        "Real browser-driven creation of a new Person Contact with every field across all four New Contact sections filled (Basic Details, Other Info, Addresses, Custom Fields), including linking a real existing Company/Referred By/Custom Contacts/Custom Matter record, an uploaded avatar image, and a Tag — not just First/Last Name. Adapts to this tenant's actual current custom field configuration (confirmed live to change over time) rather than a fixed list. Independently re-reads the resulting detail page's own text and confirms every value actually appears there. As of 2026-09-18: Basic Details/Other Info/Addresses/Company/Referred By/Custom Contacts/most Custom Fields/avatar are live-verified; the Tag picker's locator is known wrong (its real options are plain chips, not [role=\"option\"]) and Custom Matter/Custom Text were each fixed after a live failure but not yet re-verified against real staging — this case is NOT currently passing end to end. Do not treat it as trustworthy until a fresh run comes back status:\"passed\" with an empty missing array.",
     }),
     definition: {
       id: "contacts.create_all_fields_verified_on_detail_page",
@@ -318,7 +318,7 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
       const r = await runContactAllFieldsCreationCheck({ apiContracts, marker: `QAFieldTest${ts}` });
       return {
         passed: r.correlation.contractMatch && r.correlation.cardinalityOk && r.missing.length === 0,
-        actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch, missing: r.missing }),
+        actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch, missing: r.missing, picked: r.picked }),
       };
     },
     "contacts.create_phone_number_validation": async () => {

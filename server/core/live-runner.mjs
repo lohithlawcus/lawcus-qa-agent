@@ -50,13 +50,39 @@ export function permitLiveRequest(url,method,resourceType,origins=ENVIRONMENT_OR
 // shape — PUT to /contacts/:uuid — matching the real lawcus.contacts.update
 // contract's path template. Kept separate from permitLiveRequest so the
 // login test suite's own policy is never silently widened by this.
-export function permitContactsRequest(url,method,resourceType){
+export function permitContactsRequest(url,method,resourceType,postData){
  if(permitLiveRequest(url,method,resourceType))return true;
  let u;try{u=new URL(url);}catch{return false;}
  if(u.protocol!=='https:'||u.username||u.password||u.port||u.origin!==API_ORIGIN)return false;
  if(method==='PUT')return /^\/contacts\/[a-f0-9-]{36}$/.test(u.pathname);
  // lawcus.contacts.create — POST /contacts (no :uuid; the resource doesn't exist yet).
- return method==='POST'&&u.pathname==='/contacts';
+ if(method==='POST'&&u.pathname==='/contacts')return true;
+ // The New Contact dialog's "Type to search..." fields (Company, Referred
+ // By, Custom Contacts) resolve real existing records through a real
+ // search endpoint, not the create endpoint above — POST /search/contacts
+ // with a {params:{terms,type},pagination} body (params.type varies per
+ // field: "Company" for the Company field, etc). Confirmed live
+ // 2026-09-18 by directly capturing the exact request fired while typing
+ // into the Company field with no route filtering at all — an earlier fix
+ // attempt guessed POST /v2/contacts instead (a red herring: that request
+ // turns out to be the Contacts LIST page's own background load, fired
+ // before the New Contact dialog is even opened, not this search) and a
+ // live re-run afterward showed identical failures, disproving it.
+ // Restricted to that exact body shape (a "pagination" key, no
+ // create/update-looking payload) so this stays a read, never a write
+ // bypass on the same path.
+ if(method==='POST'&&u.pathname==='/search/contacts'){
+  try{const body=JSON.parse(postData||'');return body&&typeof body==='object'&&'pagination'in body;}catch{return false;}
+ }
+ // The Custom Matter field's own "Type to search..." box is the same
+ // pattern one level over — POST /search/matters with a
+ // {params:{status,terms},logicOperator,pagination} body, confirmed live
+ // 2026-09-18 the same way as /search/contacts above (direct capture,
+ // zero route filtering, typing "a" into the field).
+ if(method==='POST'&&u.pathname==='/search/matters'){
+  try{const body=JSON.parse(postData||'');return body&&typeof body==='object'&&'pagination'in body;}catch{return false;}
+ }
+ return false;
 }
 // V5 Step 15 — same shape as permitContactsRequest, but for Leads: the
 // real lawcus.leads.update call is PUT /leads with no :uuid in the path
@@ -463,7 +489,7 @@ export async function runContactCustomFieldCheck({apiContracts,mutationJournal,r
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
    await route.continue();
   });
   const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
@@ -527,7 +553,7 @@ export async function runContactCreationCheck({apiContracts,firstName,lastName})
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
    await route.continue();
   });
   const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
@@ -558,7 +584,7 @@ export async function runContactMandatoryFieldValidationCheck(){
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
    await route.continue();
   });
   const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
@@ -588,7 +614,7 @@ export async function runContactAllFieldsCreationCheck({apiContracts,marker}){
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
    await route.continue();
   });
   const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
@@ -617,7 +643,7 @@ export async function runContactPhoneValidationCheck(){
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
    await route.continue();
   });
   const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
@@ -646,7 +672,7 @@ export async function runContactBillingRateValidationCheck(){
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
    await route.continue();
   });
   const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
@@ -675,7 +701,7 @@ export async function runContactCompanyCreationCheck({apiContracts,name}){
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
    await route.continue();
   });
   const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
@@ -702,7 +728,7 @@ export async function runContactCompanyMandatoryFieldValidationCheck(){
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
+   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
    await route.continue();
   });
   const page=await context.newPage();page.on('dialog',d=>void d.dismiss());

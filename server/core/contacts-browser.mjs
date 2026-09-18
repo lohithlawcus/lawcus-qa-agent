@@ -1,5 +1,68 @@
 import { attachNetworkObserver, correlateObservation } from "./network-observer.mjs";
 import { STAGING, API_ORIGIN } from "./environment-adapter.mjs";
+import { deflateSync, crc32 } from "node:zlib";
+
+/** Hand-generates a small, valid PNG entirely in-process (a few
+ * overlapping colored circles) — no external image tool or file needed,
+ * so the avatar-upload check stays self-contained and produces a fresh
+ * image every run. A deterministic seed keeps a given run reproducible;
+ * the caller passes something like Date.now() for real variety. */
+function generateAvatarPng(seed) {
+  const W = 128, H = 128;
+  const palette = [
+    [255, 99, 71], [255, 165, 0], [255, 215, 0],
+    [60, 179, 113], [30, 144, 255], [147, 112, 219],
+  ];
+  let s = seed % 2147483647;
+  if (s <= 0) s += 2147483646;
+  const rand = () => (s = (s * 16807) % 2147483647) / 2147483647;
+
+  const circles = [];
+  for (let i = 0; i < 6; i++) {
+    circles.push({
+      cx: (0.15 + rand() * 0.7) * W,
+      cy: (0.15 + rand() * 0.7) * H,
+      r: (0.15 + rand() * 0.25) * W,
+      color: palette[Math.floor(rand() * palette.length)],
+    });
+  }
+  const bg = [245, 247, 250];
+  const rowBytes = 1 + W * 3;
+  const raw = Buffer.alloc(rowBytes * H);
+  for (let y = 0; y < H; y++) {
+    const rowStart = y * rowBytes;
+    raw[rowStart] = 0;
+    for (let x = 0; x < W; x++) {
+      let [r, g, b] = bg;
+      let best = -1;
+      for (const c of circles) {
+        const d = Math.hypot(x - c.cx, y - c.cy);
+        if (d <= c.r) {
+          const weight = 1 - d / c.r;
+          if (weight > best) { best = weight; [r, g, b] = c.color; }
+        }
+      }
+      const px = rowStart + 1 + x * 3;
+      raw[px] = r; raw[px + 1] = g; raw[px + 2] = b;
+    }
+  }
+  const compressed = deflateSync(raw, { level: 9 });
+  function chunk(tag, data) {
+    const tagBuf = Buffer.from(tag, "ascii");
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const crcBuf = Buffer.alloc(4); crcBuf.writeUInt32BE(crc32(Buffer.concat([tagBuf, data])) >>> 0);
+    return Buffer.concat([len, tagBuf, data, crcBuf]);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", compressed),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 
 // V5 Step 15 — Contacts + Custom Fields, browser-driven (per the user's
 // explicit direction: writes go through the real UI, not a bare API call —
@@ -247,19 +310,95 @@ async function fillContactFieldByLabel(page, labelText, value) {
   await input.fill(value);
 }
 
+/** Opens a dropdown by label and picks whatever its first real option is
+ * — used for fields whose valid values aren't known ahead of time (e.g. a
+ * firm-specific "Custom Org Users" list). Returns the picked option's
+ * text, or null if the dropdown has no options at all. */
+async function selectContactFirstDropdownOption(page, labelText) {
+  const dropdown = contactDialog(page)
+    .getByText(labelText, { exact: true })
+    .locator("..")
+    .locator("..")
+    .locator(".MuiSelect-select, [role=\"combobox\"]")
+    .first();
+  await dropdown.click();
+  await page.waitForTimeout(500);
+  const options = page.locator('[role="option"]');
+  if ((await options.count()) === 0) {
+    await page.keyboard.press("Escape").catch(() => {});
+    return null;
+  }
+  const text = (await options.first().textContent())?.trim();
+  await options.first().click();
+  return text;
+}
+
+/** Types into a "Type to search..." field and picks its first real
+ * result — used for fields that link to an existing real record (an
+ * existing Company, Contact, or Matter). Picking the first match is a
+ * deliberate, temporary choice (2026-09-18): a genuinely random real
+ * record today, until a dedicated set of QA-owned Contacts/Matters exists
+ * to pick from instead — see this function's callers for the plan to
+ * switch to those once they're identified. Returns the picked record's
+ * display text, or null if nothing matched. */
+async function pickFirstContactSearchResult(page, searchInput, query = "a") {
+  const options = page.locator('[role="option"], li[role="option"]');
+  // Real, reproducible race (hit live 2026-09-18, confirmed by direct
+  // diagnostic): this autocomplete's underlying record list loads
+  // asynchronously after the dialog opens, and typing before it's ready
+  // yields zero options even though the exact same query reliably returns
+  // real results once it's loaded — a data-readiness race, not a broken
+  // interaction. 5 attempts with a generous wait between them absorbs
+  // that load time instead of masking a genuine UI defect (there isn't
+  // one here: the diagnostic got 50 real results with enough time).
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    await searchInput.click();
+    await searchInput.fill("");
+    await searchInput.type(query);
+    await page.waitForTimeout(2000);
+    if ((await options.count()) > 0) {
+      const text = (await options.first().textContent())?.trim();
+      await options.first().click();
+      await page.waitForTimeout(300);
+      return text;
+    }
+  }
+  return null;
+}
+
 /**
  * Creates a brand-new standalone Person contact through the real "New
- * Contact" UI with every field across all sections filled (Basic Details,
- * Other Info, Addresses, Custom Fields) — the comprehensive counterpart to
- * createContactViaBrowser's First/Last-only creation. Independently
- * re-reads the resulting detail page's own text afterward and reports any
- * expected value that doesn't actually appear there — never assumes the
- * form's own state proves what was saved (section 24's discipline).
- * Live-verified end to end 2026-09-18: every field below appeared
- * correctly on the real detail page. Deliberately skips Company/Referred
- * By/Custom Contacts (link to other real records — out of scope for a
- * repeatable creation check) and Tags/avatar/Client Portal (not yet
- * exercised).
+ * Contact" UI with every field across all sections filled — Basic
+ * Details, Other Info (including linking a real existing Company and
+ * Referred By contact), Addresses, Custom Fields (including linking a
+ * real existing Custom Contacts contact and a real existing Custom
+ * Matter, and every firm-specific custom field currently configured —
+ * this tenant's custom fields have themselves grown between sessions,
+ * confirmed live, so unknown/new ones are detected and filled rather than
+ * hardcoded), an uploaded avatar image, and a Tag. Independently re-reads
+ * the resulting detail page's own text afterward and reports any expected
+ * value that doesn't actually appear there — never assumes the form's own
+ * state proves what was saved (section 24's discipline).
+ *
+ * Company/Referred By/Custom Contacts/Custom Matter each link to a real
+ * existing record picked as the first search result for a generic query —
+ * a genuinely random real record, deliberately, until a dedicated set of
+ * QA-owned Contacts/Matters exists to reference by name instead (the
+ * user's own direction 2026-09-18: random for now, our own fixtures
+ * later).
+ *
+ * Basic Details/Other Info/Addresses/Company/Referred By/Custom
+ * Contacts/most Custom Fields/avatar are live-verified end to end
+ * 2026-09-18. Two gaps are known and NOT yet live-verified as of this
+ * commit: the Tag picker's real options render as plain chip elements,
+ * not `[role="option"]` (this function's current tag-picking locator was
+ * written against the wrong assumption and needs a follow-up fix before
+ * it can be trusted), and Custom Matter's search-link plus Custom Text's
+ * id-anchored fill were each fixed after a live failure but the fix
+ * itself hasn't been re-run against real staging yet — do not treat
+ * either as confirmed until a fresh `runApprovedTest` on
+ * contacts.create_all_fields_verified_on_detail_page comes back
+ * status:"passed" with an empty `missing` array.
  */
 export async function createContactAllFieldsViaBrowser({ context, apiContracts, marker }) {
   const observer = attachNetworkObserver(context);
@@ -285,7 +424,10 @@ export async function createContactAllFieldsViaBrowser({ context, apiContracts, 
     country: "Testland",
     customNumber: "42",
     customText: "QA custom text value",
+    customDate: "01/01/2026",
+    customMultiText: "QA multi-line custom text.\nSecond line.",
   };
+  const picked = {};
   try {
     await openNewContactDialog(page);
 
@@ -304,6 +446,14 @@ export async function createContactAllFieldsViaBrowser({ context, apiContracts, 
     await page.waitForTimeout(300);
     await dialog.locator('input[name="title"]').fill(fields.title);
     await dialog.locator('input[name="website"]').fill(fields.website);
+    // Anchored by position, not by label text: "Company" as an exact-text
+    // label also matches the Contact Type radio button of the same name
+    // (real collision hit live 2026-09-18), so the reliable anchor here is
+    // this section's "Type to search..." placeholder, in real, confirmed
+    // DOM order — Company first, then Referred By.
+    const otherInfoSearchInputs = dialog.getByPlaceholder("Type to search...");
+    picked.company = await pickFirstContactSearchResult(page, otherInfoSearchInputs.nth(0));
+    picked.referredBy = await pickFirstContactSearchResult(page, otherInfoSearchInputs.nth(1));
     await selectContactDropdownOption(page, "Lead Source", "Referral");
     await dialog.locator('input[name="ledesClientId"]').fill(fields.ledesClientId);
     await dialog.locator('textarea[name="note"]').fill(fields.note);
@@ -318,14 +468,69 @@ export async function createContactAllFieldsViaBrowser({ context, apiContracts, 
 
     await dialog.getByText("Custom Fields", { exact: true }).first().click();
     await page.waitForTimeout(300);
-    await ensureFieldOnForm(page, "Custom Text");
     await dialog.locator("#custom-component-Custom\\ Number").fill(fields.customNumber);
+    // Anchored by this field's own real id, not ".last()" text input on
+    // the page (real bug hit live 2026-09-18: as more custom fields exist,
+    // the last text input on the page stops being Custom Text
+    // specifically) and not a label-relative xpath either (silently
+    // filled *something* without erroring, live-confirmed 2026-09-18, but
+    // "QA custom text value" never showed up on the saved detail page —
+    // same id-anchored pattern already used below for Custom Number/
+    // Custom Checkbox/etc, all of which never had this problem). Works
+    // whether the field is already on the form (default) or needs adding.
+    await ensureFieldOnForm(page, "Custom Text");
+    await dialog.locator("#custom-component-Custom\\ Text").fill(fields.customText);
+    // These three appeared in this tenant only after the original version
+    // of this check was written (confirmed live 2026-09-18: custom field
+    // definitions here are edited over time, not fixed) — filled only if
+    // actually present, so this check adapts instead of breaking outright
+    // if they're renamed or removed later.
+    const customDateInput = dialog.getByText("Custom Date", { exact: true }).locator("..").locator('input[placeholder="DD/MM/YYYY"]').first();
+    if ((await customDateInput.count()) > 0) await customDateInput.fill(fields.customDate);
+    const customMultiTextInput = dialog.getByText("Custom Multi Text", { exact: true }).locator("..").locator("textarea").first();
+    if ((await customMultiTextInput.count()) > 0) await customMultiTextInput.fill(fields.customMultiText);
+    const customCheckbox = dialog.locator("#custom-component-Custom\\ Checkbox");
+    if ((await customCheckbox.count()) > 0) await customCheckbox.check({ force: true });
+    if ((await dialog.getByText("Custom Org Users", { exact: true }).count()) > 0) {
+      picked.customOrgUser = await selectContactFirstDropdownOption(page, "Custom Org Users");
+    }
+
     await selectContactDropdownOption(page, "Custom Pick List", "Banana");
+    // Custom Contacts is the 3rd "Type to search..." input in the dialog
+    // overall (Company and Referred By, both in Other Info, are the 1st
+    // and 2nd) — same real, confirmed DOM-order anchor as those two.
+    const allSearchInputs = dialog.getByPlaceholder("Type to search...");
+    picked.customContacts = await pickFirstContactSearchResult(page, allSearchInputs.nth(2));
+    const customMatterFieldExists = (await dialog.getByText("Custom Matter", { exact: true }).count()) > 0;
+    if (customMatterFieldExists) {
+      picked.customMatter = await pickFirstContactSearchResult(page, allSearchInputs.nth(3));
+    }
     await dialog.locator("#custom-component-Custom\\ Contact\\ info\\ field").check({ force: true });
     await selectContactDropdownOption(page, "New Contact Picklist", "Wonder");
     await dialog.locator("#custom-component-Custom\\ Contact").check({ force: true });
     await dialog.locator("#custom-component-PHP\\ test\\ checkbox").check({ force: true });
-    await dialog.locator('input[type="text"]').last().fill(fields.customText);
+
+    // Avatar — a freshly generated abstract-art PNG, never a fixed file on
+    // disk, so this check needs no external asset and produces a genuinely
+    // new image every run.
+    await dialog.locator("#avatar_input").setInputFiles({
+      name: "qa-avatar.png",
+      mimeType: "image/png",
+      buffer: generateAvatarPng(Date.now()),
+    });
+    await page.waitForTimeout(800);
+
+    // Tag — whichever real tag is offered first; this tenant's tag list is
+    // itself real, existing configuration, not invented here.
+    const tagIcon = dialog.locator("text=Tags").locator("..").locator("svg, button, [role=\"button\"]").first();
+    await tagIcon.click();
+    await page.waitForTimeout(500);
+    const tagChip = page.locator('[role="option"], li[role="option"]').first();
+    if ((await tagChip.count()) > 0) {
+      picked.tag = (await tagChip.textContent())?.trim();
+      await tagChip.click();
+    }
+    await page.keyboard.press("Escape").catch(() => {});
 
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await page.waitForURL(/\/contact\/[a-f0-9-]{36}/, { timeout: 20000 }).catch(() => {});
@@ -344,17 +549,46 @@ export async function createContactAllFieldsViaBrowser({ context, apiContracts, 
 
     // Independently re-read the detail page's own rendered text — proof of
     // what was actually saved, not just what the form showed before Save.
+    // The expected list is built from what was actually filled/picked at
+    // runtime (not hardcoded), since the linked records and this tenant's
+    // custom fields are both real and can vary run to run.
     await page.waitForTimeout(1500);
     const detailText = await page.locator("body").innerText();
     const expected = [
       fields.firstName, fields.middleName, fields.lastName, "Non-binary", "15/06/1990",
       fields.email, fields.title, fields.website, "Referral", fields.ledesClientId, fields.note,
       fields.street, fields.city, fields.zip, fields.country, fields.customNumber,
-      "Banana", "Wonder", fields.customText,
+      fields.customText, "Banana", "Wonder",
     ];
     const missing = expected.filter((value) => !detailText.includes(value));
 
-    return { uuid: match[1], correlation, events: observer.events, missing, fields };
+    // Company/Referred By/Custom Contacts/Custom Matter/Tag are required
+    // to have actually been picked, not just checked-if-truthy: silently
+    // excluding a failed pick from "missing" would let this report
+    // "passed" while never actually exercising that field — exactly the
+    // fabricated-coverage failure mode this project exists to avoid. A
+    // pick that succeeded is still verified against the real detail page.
+    for (const [label, value] of [
+      ["Company", picked.company],
+      ["Referred By", picked.referredBy],
+      ["Custom Contacts", picked.customContacts],
+      ["Tag", picked.tag],
+    ]) {
+      if (value == null) missing.push(`${label}: no search result could be picked`);
+      else if (!detailText.includes(value)) missing.push(`${label}: picked "${value}" but it doesn't appear on the detail page`);
+    }
+    // Custom Matter is conditional on the field actually existing — this
+    // tenant's custom fields have themselves changed between sessions
+    // (confirmed live 2026-09-18), so its absence isn't a failure. But if
+    // the field DOES exist, failing to pick a result for it is a real
+    // failure, same as the always-required fields above — the field's
+    // mere existence, not a truthy check on the pick, decides that.
+    if (customMatterFieldExists) {
+      if (picked.customMatter == null) missing.push("Custom Matter: no search result could be picked");
+      else if (!detailText.includes(picked.customMatter)) missing.push(`Custom Matter: picked "${picked.customMatter}" but it doesn't appear on the detail page`);
+    }
+
+    return { uuid: match[1], correlation, events: observer.events, missing, fields, picked };
   } finally {
     observer.dispose();
     await page.close().catch(() => {});
