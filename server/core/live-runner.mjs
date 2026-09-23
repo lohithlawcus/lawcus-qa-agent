@@ -133,18 +133,29 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
   const creds=JSON.parse(await readSecret(credentialAccount));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(origins.egressHosts);
   mkdirSync(artifactDirectory,{recursive:true,mode:0o700});
+  // Headed, not headless — the user asked to watch this specific flow
+  // run (2026-09-16): "the browser should open the url and test the
+  // feature." Same pattern already used for connectInBrowser,
+  // verifyPersonaInBrowser and startAuthoringSession below — this app is
+  // local, single-operator tooling ("Local development" in its own UI),
+  // never CI (CI's test:browser only exercises runner.mjs's fixture
+  // path, never this function — confirmed, not assumed).
+  // One browser process for the whole run (2026-09-23): each scenario
+  // below still gets its own fresh Playwright *context* — separate
+  // cookies, storage and service workers, the same isolation a whole new
+  // browser process gave, so an earlier scenario's login state can never
+  // leak into the next one. Only the process-launch overhead is now
+  // shared across scenarios; login frequency against real staging is
+  // unchanged. That frequency, not process count, is the documented real
+  // constraint here — see executeImpactedTest's delayBetweenRunsMs
+  // comment in impacted-testing.mjs: repeated real logins in quick
+  // succession are what caused staging-side flakiness before, and this
+  // change doesn't touch that spacing.
+  browser=await launch(proxy,false);
   for(const scenario of plan.scenarios){
    const id=randomUUID();const started=Date.now();const events=[];const blocked=new Set();let context;let page;let observer;let actual=liveDescriptions[scenario].expected;let status='passed';let healed=false;let candidate;let loginRequests=0;let loginStatus;let logoutRequested=false;let logoutRequests=0;let failureCategory='behavior-or-automation';
    const event=(action,result)=>events.push({at:now(),action,result});
    try{
-    // Headed, not headless — the user asked to watch this specific flow
-    // run (2026-09-16): "the browser should open the url and test the
-    // feature." Same pattern already used for connectInBrowser,
-    // verifyPersonaInBrowser and startAuthoringSession below — this app is
-    // local, single-operator tooling ("Local development" in its own UI),
-    // never CI (CI's test:browser only exercises runner.mjs's fixture
-    // path, never this function — confirmed, not assumed).
-    browser=await launch(proxy,false);
     // Bumped from 12000 -> 35000 (2026-09-17): a real Co Server run's
     // valid_login scenario failed to resolve the post-login identity within
     // 12s, then a live diagnostic (same login, same account) confirmed the
@@ -255,7 +266,10 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
     const name=`${randomUUID()}.json.enc`;writeFileSync(join(artifactDirectory,name),await sealEvidence(trace),{mode:0o600});artifacts.push(['trace',name]);trace.fill(0);
     if(!page)throw new Error('No screenshot captured.');
    }catch{if(status==='passed'){failed++;status='failed';actual='The check could not save its required encrypted evidence. It is not counted as passed.';}}
-   finally{await context?.close().catch(()=>{});await browser?.close().catch(()=>{});browser=null;}
+   // Only the per-scenario context closes here now — the browser process
+   // is shared across the whole run (see the launch() call before this
+   // loop) and closes once, in this function's own outer finally below.
+   finally{await context?.close().catch(()=>{});}
    // Pre-existing bug fixed here (V5 Step 11): migration 005 added
    // test_case_id/test_definition_version_id to scenario_results, but this
    // legacy live-staging path (predates the DSL/TestBook system) was never
