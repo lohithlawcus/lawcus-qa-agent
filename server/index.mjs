@@ -759,10 +759,9 @@ const server = createServer(
           networkObservations,
           ...(controller ? { signal: controller.signal } : {}),
         })
-          .catch(() => {
-            db.prepare(
-              "UPDATE runs SET status='interrupted',finished_at=?,summary='Execution stopped unexpectedly.' WHERE id=?",
-            ).run(now(), id);
+          .catch((error) => {
+            // Recorded, classified and counted from what was saved, like every other run.
+            finalizeRun(db, id, { planned: null, error });
           })
           .finally(async () => {
             activeRuns.delete(id);
