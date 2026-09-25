@@ -70,7 +70,7 @@ test("the same statement in a DIFFERENT feature is a different fact", () => {
 });
 
 test("proposing under an alias with a NEW statement is a revision of the original item", () => {
-  withStore((kb, db) => {
+  withStore((kb) => {
     const first = kb.proposeItem(item());
     kb.proposeItem(item({ semanticId: "BR-SAMPLE-RENAMED-001" }));
     const revised = kb.proposeItem(item({ semanticId: "BR-SAMPLE-RENAMED-001", statement: "A changed statement." }));
