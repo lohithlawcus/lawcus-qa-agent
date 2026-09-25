@@ -94,7 +94,7 @@ export function planImpactedTest({ intent, knowledge, testbook }) {
   const normalizedIntent = normalizeIntent(intent);
   const pattern = KNOWN_IMPACT_PATTERNS.find((p) => p.test(normalizedIntent));
   if (!pattern) {
-    return { normalizedIntent, matched: false, features: [], knowledgeItems: [], cells: [], gaps: [] };
+    return { normalizedIntent, matched: false, features: [], knowledgeItems: [], reviewFlags: [], cells: [], gaps: [] };
   }
 
   const approvedEdges = knowledge.approvedGraph();
@@ -129,6 +129,9 @@ export function planImpactedTest({ intent, knowledge, testbook }) {
     subjectFeatureName: pattern.subjectFeatureName,
     features,
     knowledgeItems,
+    // Facts this plan leans on that a change signal has flagged as possibly
+    // out of date. Informational: it does not block or alter any cell.
+    reviewFlags: knowledge.openReviewFlags?.(knowledgeItems.map((item) => item.id)) ?? [],
     cells,
     // A quarantined case exists and is approved — it is not a coverage
     // gap to propose new tests for, it is a known-broken check to repair.

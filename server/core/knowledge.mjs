@@ -15,7 +15,7 @@ export class KnowledgeError extends Error {
 
 const NON_HUMAN_ORIGINS = new Set(["ai_extraction", "ai_planner", "runner", "network_observer"]);
 
-function requireHumanApprover(approver) {
+export function requireHumanApprover(approver) {
   if (!approver || typeof approver !== "string")
     throw new KnowledgeError("no_approver", "An approver identity is required.");
   if (NON_HUMAN_ORIGINS.has(approver))
@@ -407,6 +407,22 @@ export function openKnowledge(db, audit) {
   /** Parses the JSON-array/object columns back out and attaches the
    * item's real, existing links (never guessed) to specific API contracts
    * and test cases — the row shape the UI actually renders. */
+  /** Open "this approved fact may be out of date" flags (KB-05), optionally
+   * limited to some items. Informational only: a flag never changes a fact. */
+  function openReviewFlags(itemIds = null) {
+    const rows = db
+      .prepare(
+        `SELECT knowledge_review_flags.id AS flag_id, knowledge_review_flags.knowledge_item_id, knowledge_review_flags.note,
+                knowledge_review_flags.raised_at, knowledge_items.semantic_id, knowledge_items.title, change_signals.title AS signal_title
+         FROM knowledge_review_flags
+         JOIN knowledge_items ON knowledge_items.id = knowledge_review_flags.knowledge_item_id
+         JOIN change_signals ON change_signals.id = knowledge_review_flags.signal_id
+         WHERE knowledge_review_flags.status='open' ORDER BY knowledge_review_flags.raised_at`,
+      )
+      .all();
+    return itemIds ? rows.filter((row) => itemIds.includes(row.knowledge_item_id)) : rows;
+  }
+
   function withLinks(row) {
     const links = itemLinks(row.id);
     return {
@@ -495,6 +511,7 @@ export function openKnowledge(db, audit) {
     inboxEdges,
     approvedByFeature,
     collapseDuplicates,
+    openReviewFlags,
     resolveSemanticId,
     linkApiContract,
     linkTest,
