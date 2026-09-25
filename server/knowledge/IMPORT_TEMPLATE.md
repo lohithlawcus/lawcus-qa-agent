@@ -20,6 +20,8 @@ Rules:
 - `### EDGE: <EDGE_TYPE>` starts a relationship between two features that
   must already exist (created earlier in this file, or already in the
   system).
+- Every Knowledge item needs a `Source Title:` (its `Source URL:` is optional): a
+  fact with nothing supporting it is refused. Relationships may leave it out.
 - Any typo, unknown type, invalid semantic ID, or bad Provenance value fails
   the *entire* import with a line number — nothing partial ever gets
   proposed.
@@ -47,6 +49,7 @@ Release: 2026.09
 Title: Invoice numbers are unique per firm
 Provenance: DOCUMENTED
 Statement: An invoice number must be unique within the firm; Lawcus rejects a duplicate invoice number.
+Source Title: Example source (replace with the real one)
 
 ### EDGE: DEPENDS_ON
 From: Billing
@@ -60,6 +63,7 @@ Description: The core case/file record everything else (billing, contacts, docum
 Title: A matter must have a name
 Provenance: DOCUMENTED
 Statement: Creating a matter without a name is blocked by required-field validation.
+Source Title: Example source (replace with the real one)
 
 ### EDGE: DEPENDS_ON
 From: Billing

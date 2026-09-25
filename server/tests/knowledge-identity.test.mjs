@@ -171,3 +171,32 @@ test("the migration is recorded and the HTTP route is wired to a human approver"
   const index = readFileSync(new URL("../index.mjs", import.meta.url), "utf8");
   assert.match(index, /knowledge\.collapseDuplicates\(\{ approver: approverIdentity, apply: input\.apply \}\)/);
 });
+
+// ---------- facts that predate the naming convention ----------
+
+test("a fact with an older, dotted id can still be revised; a brand-new dotted id is still refused", () => {
+  withStore((kb, db) => {
+    const legacy = kb.proposeItem(item());
+    db.prepare("UPDATE knowledge_items SET semantic_id='contacts.person-or-company' WHERE id=?").run(legacy.id);
+    kb.approveItem(legacy.id, "operator:t");
+    const revised = kb.proposeItem(item({ semanticId: "contacts.person-or-company", statement: "A revised statement." }));
+    assert.equal(revised.semantic_id, "contacts.person-or-company");
+    assert.equal(revised.version, 2);
+    assert.equal(revised.status, "pending_review");
+    // the same statement again is idempotent, as for any fact
+    assert.equal(kb.proposeItem(item({ semanticId: "contacts.person-or-company", statement: "A revised statement." })).id, revised.id);
+    // ...but a NEW id that breaks the convention is refused, as before
+    assert.throws(() => kb.proposeItem(item({ semanticId: "contacts.something-new", statement: "Brand new." })), (e) => e.code === "invalid_semantic_id");
+  });
+});
+
+test("an alias of an older fact is also accepted when revising, and the convention still guards new ids", () => {
+  withStore((kb, db) => {
+    const legacy = kb.proposeItem(item());
+    db.prepare("UPDATE knowledge_items SET semantic_id='contacts.old-id' WHERE id=?").run(legacy.id);
+    db.prepare("INSERT INTO knowledge_item_aliases(alias_semantic_id,knowledge_item_id,reason,created_at) VALUES(?,?,?,?)").run("contacts.old-alias", legacy.id, "test", new Date().toISOString());
+    const viaAlias = kb.proposeItem(item({ semanticId: "contacts.old-alias", statement: "Changed via the alias." }));
+    assert.equal(viaAlias.semantic_id, "contacts.old-id");
+    assert.throws(() => kb.proposeItem(item({ semanticId: "contacts.unknown-alias", statement: "x y z." })), (e) => e.code === "invalid_semantic_id");
+  });
+});

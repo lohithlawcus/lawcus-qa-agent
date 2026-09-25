@@ -29,6 +29,7 @@ import {
   Video,
   Cpu,
   Power,
+  ClipboardCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -48,7 +49,10 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-const API = "http://127.0.0.1:4319";
+import { API, request, ApiError } from "@/lib/qa-api";
+import { FactReview } from "@/components/fact-review";
+import { ChangeSignals } from "@/components/change-signals";
+import { PlanNotices, isBlocked, type PlanBlocker, type PlanReviewRequest } from "@/components/plan-notices";
 type Run = {
   id: string;
   runbook_id: string;
@@ -347,6 +351,10 @@ type ImpactedCell = {
   status?: string;
   actual?: string;
   retried?: boolean;
+  // present on plans built from approved knowledge
+  role?: "subject" | "impacted";
+  reasons?: string[];
+  prerequisites?: { prerequisite: string; mode: string }[];
 };
 type ImpactedPlan = {
   normalizedIntent: string;
@@ -356,6 +364,13 @@ type ImpactedPlan = {
   knowledgeItems: { id: string; semantic_id: string; title: string }[];
   cells: ImpactedCell[];
   gaps: ImpactedCell[];
+  origin?: string;
+  status?: string;
+  blockers?: PlanBlocker[];
+  reviewRequests?: PlanReviewRequest[];
+  uncoveredFeatures?: string[];
+  outOfScopeFacts?: number;
+  reviewFlags?: { flag_id: string; semantic_id: string; title: string; signal_title: string }[];
 };
 type ImpactedRunResult = {
   runId?: string;
@@ -363,33 +378,6 @@ type ImpactedRunResult = {
   results: ImpactedCell[];
   filedProposals: { id: string; summary: string }[];
 };
-async function request<T = Record<string, string>>(
-  path: string,
-  body?: unknown,
-  retry = true,
-): Promise<T> {
-  const res = await fetch(API + path, {
-    method: body === undefined ? "GET" : "POST",
-    credentials: "include",
-    headers: {
-      "X-QA-Client": "lawcus-workspace",
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-    },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-  const data: unknown = await res.json();
-  if (res.status === 401 && retry) {
-    await request("/session", {}, false);
-    return request<T>(path, body, false);
-  }
-  if (!res.ok)
-    throw new Error(
-      typeof data === "object" && data !== null && "error" in data
-        ? String(data.error)
-        : "The request could not be completed.",
-    );
-  return data as T;
-}
 const date = (s: string) =>
   new Date(s).toLocaleString(undefined, {
     month: "short",
@@ -405,6 +393,7 @@ Title: An invoice needs at least one timekeeper on the matter
 Provenance: DOCUMENTED
 Statement: A matter must have at least one timekeeper assigned before an invoice can be generated for it.
 Applies To: existing_matter
+Source Title: Lawcus billing overview (example)
 
 ### EDGE: DEPENDS_ON
 From: Billing
@@ -423,6 +412,9 @@ export default function Home() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  // A Knowledge approval the service refused because the evidence is weaker than
+  // the fact it would replace; shown next to that item until the person decides.
+  const [lowerAuthority, setLowerAuthority] = useState<{ id: string; message: string } | null>(null);
   const [personaConnection, setPersonaConnection] = useState<{ status: string; message: string } | null>(null);
   const [personaForm, setPersonaForm] = useState({ role: "admin", label: "", credentialAccount: "lawcus-persona-admin" });
   const [authoringForm, setAuthoringForm] = useState({ environmentId: "fixture", featureName: "", workflowDescription: "" });
@@ -544,6 +536,10 @@ export default function Home() {
           await refresh();
           return;
         }
+        // A request the impact planner refuses (for example a destructive one) is
+        // explained, not handed on to another planner.
+        const refused = ip.reviewRequests?.find((r) => r.severity === "refused");
+        if (refused) throw new Error(refused.message);
       }
       const p = await request<Plan>("/plans", { intent, planner: "ai", environmentId: environment });
       setPlan(p);
@@ -654,11 +650,28 @@ export default function Home() {
     kind: "items" | "edges",
     id: string,
     verb: "approve" | "reject",
+    acceptLowerAuthority = false,
   ) {
     await action(async () => {
       const noteKey = `k-${id}`;
       const note = (notes[noteKey] || "").trim();
-      await request(`/knowledge/${kind}/${id}/${verb}`, note ? { note } : {});
+      if (acceptLowerAuthority && !note)
+        throw new Error("Write a note saying why you accept the weaker evidence, then approve.");
+      try {
+        await request(
+          `/knowledge/${kind}/${id}/${verb}`,
+          note || acceptLowerAuthority
+            ? { ...(note ? { note } : {}), ...(acceptLowerAuthority ? { acceptLowerAuthority: true } : {}) }
+            : {},
+        );
+      } catch (e) {
+        if (e instanceof ApiError && e.code === "lower_authority") {
+          setLowerAuthority({ id, message: e.message });
+          return;
+        }
+        throw e;
+      }
+      setLowerAuthority(null);
       setNotes((n) => {
         const next = { ...n };
         delete next[noteKey];
@@ -918,6 +931,10 @@ export default function Home() {
                 <Badge variant="outline">{pendingKnowledgeCount}</Badge>
               )}
             </TabsTrigger>
+            <TabsTrigger value="review">
+              <ClipboardCheck />
+              Facts &amp; changes
+            </TabsTrigger>
             <TabsTrigger value="api">
               <Webhook />
               API Contracts
@@ -959,7 +976,9 @@ export default function Home() {
                           ? "Nothing changes without your say"
                           : tab === "knowledge"
                             ? "Observed is evidence. Approved is truth."
-                            : tab === "api"
+                            : tab === "review"
+                              ? "Every rule, its evidence, and what changed"
+                              : tab === "api"
                               ? "What an endpoint should do, and where it may be called"
                               : tab === "personas"
                                 ? "Verified is signed in for real. Nothing else counts."
@@ -982,7 +1001,9 @@ export default function Home() {
                           ? "A candidate change to a locator or test never applies itself. Review the evidence, then approve or reject."
                           : tab === "knowledge"
                             ? "Every rule below cites its source. Nothing becomes trusted product truth until you approve it."
-                            : tab === "api"
+                            : tab === "review"
+                              ? "See who approved a rule, where it applies and what supports it, and turn a product change into a reviewed update. Nothing changes by itself."
+                              : tab === "api"
                               ? "A contract, its environment, and its network authority are approved separately. All three are required before any real call runs."
                               : tab === "personas"
                                 ? "A persona only becomes usable after a real, visible sign-in confirms its identity — never a saved claim."
@@ -1257,7 +1278,9 @@ export default function Home() {
                   <div className="panel">
                     <div className="panel-heading">
                       <div>
-                        <span className="section-label">READY FOR REVIEW</span>
+                        <span className="section-label">
+                          {isBlocked(impactedPlan) ? "CANNOT RUN YET" : "READY FOR REVIEW"}
+                        </span>
                         <h2>{impactedPlan.subjectFeatureName} impact</h2>
                       </div>
                       <Badge variant="outline">
@@ -1265,9 +1288,11 @@ export default function Home() {
                       </Badge>
                     </div>
                     <p className="subtle">
-                      Recognized locally — matched to approved coverage across
-                      the Impact Graph, without an AI call.
+                      {impactedPlan.origin === "graph"
+                        ? "Planned from approved Knowledge: each check below says why it was chosen. Nothing unapproved was used, and no AI call was made."
+                        : "Recognized locally — matched to approved coverage across the Impact Graph, without an AI call."}
                     </p>
+                    <PlanNotices plan={impactedPlan} />
                     <div className="inline">
                       {impactedPlan.features.map((f) => (
                         <Badge key={f} variant="outline">
@@ -1284,9 +1309,25 @@ export default function Home() {
                           <div className="list-row" key={cell.externalId}>
                             <div>
                               <h3>
-                                {cell.featureName} — {cell.recordState} record
+                                {cell.featureName}
+                                {cell.role ? ` — ${cell.role === "subject" ? "named in the request" : "impacted"}` : ` — ${cell.recordState} record`}
                               </h3>
                               <p className="subtle">{cell.externalId}</p>
+                              {cell.reasons?.map((reason) => (
+                                <p className="small-note" key={reason}>{reason}</p>
+                              ))}
+                              {cell.prerequisites?.map((p) => (
+                                <p className="small-note" key={p.prerequisite}>
+                                  Needs {p.prerequisite}:{" "}
+                                  {p.mode === "self_provisioned"
+                                    ? "the check creates it"
+                                    : p.mode === "existing_fixture"
+                                      ? "uses what already exists"
+                                      : p.mode === "not_needed"
+                                        ? "this check does not depend on it"
+                                        : "not set up by this check"}
+                                </p>
+                              ))}
                               {executed?.actual && (
                                 <p className="small-note">{executed.actual}</p>
                               )}
@@ -1301,7 +1342,9 @@ export default function Home() {
                                   ? "approved · not run yet"
                                   : cell.blockedReason === "quarantined"
                                     ? "quarantined"
-                                    : "needs review"}
+                                    : cell.blockedReason === "prerequisite_unmet"
+                                      ? "needs setup"
+                                      : "needs review"}
                             </Badge>
                           </div>
                         );
@@ -1320,11 +1363,11 @@ export default function Home() {
                       </span>
                       <Button
                         className="primary-button"
-                        disabled={busy || running}
+                        disabled={busy || running || isBlocked(impactedPlan)}
                         onClick={() => runPlan()}
                       >
                         <Play />
-                        Run {impactedPlan.cells.length} checks
+                        {isBlocked(impactedPlan) ? "Blocked" : `Run ${impactedPlan.cells.length} checks`}
                       </Button>
                     </div>
                   </div>
@@ -1908,6 +1951,25 @@ export default function Home() {
                               Reject
                             </Button>
                           </div>
+                          {lowerAuthority?.id === k.id && (
+                            <div className="notice error" role="alert">
+                              <AlertTriangle size={16} />
+                              <div>
+                                <p>{lowerAuthority.message}</p>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busy || !(notes["k-" + k.id] || "").trim()}
+                                  onClick={() => decideKnowledge("items", k.id, "approve", true)}
+                                >
+                                  Approve anyway: I accept the weaker evidence
+                                </Button>
+                                {!(notes["k-" + k.id] || "").trim() && (
+                                  <p className="small-note">Write your reason in the note box above first.</p>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1985,6 +2047,20 @@ export default function Home() {
                 ))}
               </div>
             ) : null}
+          </TabsContent>
+          <TabsContent value="review">
+            <Tabs defaultValue="facts">
+              <TabsList>
+                <TabsTrigger value="facts">Facts</TabsTrigger>
+                <TabsTrigger value="changes">Product changes</TabsTrigger>
+              </TabsList>
+              <TabsContent value="facts">
+                <FactReview />
+              </TabsContent>
+              <TabsContent value="changes">
+                <ChangeSignals />
+              </TabsContent>
+            </Tabs>
           </TabsContent>
           <TabsContent value="api">
             <div className="panel question-panel">

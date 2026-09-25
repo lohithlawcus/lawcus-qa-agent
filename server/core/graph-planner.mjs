@@ -158,7 +158,13 @@ export function planFromKnowledge({ intent, knowledge, testbook, caseSetup = CAS
       const declared = caseSetup[testCase.externalId] || {};
       const satisfied = needs.map((prerequisite) => ({
         prerequisite,
-        mode: (declared.selfProvisions || []).includes(prerequisite) ? "self_provisioned" : (declared.usesFixtures || []).includes(prerequisite) ? "existing_fixture" : "unmet",
+        mode: (declared.selfProvisions || []).includes(prerequisite)
+          ? "self_provisioned"
+          : (declared.usesFixtures || []).includes(prerequisite)
+            ? "existing_fixture"
+            : declared.needsNoSetup === true
+              ? "not_needed"
+              : "unmet",
       }));
       const unmet = satisfied.filter((entry) => entry.mode === "unmet").map((entry) => entry.prerequisite);
       let blockedReason = null;

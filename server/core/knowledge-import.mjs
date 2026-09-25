@@ -22,7 +22,7 @@ import { TYPE_PREFIXES, PROVENANCE_VALUES, validateSemanticId, KnowledgeError } 
 //   Does Not Mean: <optional>
 //   Applies To: <optional, comma-separated>
 //   Preconditions: <optional, comma-separated>
-//   Source Title: <optional>
+//   Source Title: <REQUIRED: what supports this fact; a fact with no source is refused>
 //   Source URL: <optional>
 //   Related Tests: <optional, comma-separated TestBook external ids>
 //   API Contracts: <optional, comma-separated API contract semantic ids>
@@ -99,6 +99,8 @@ export function parseKnowledgeMarkdown(text) {
         });
       if (!f.get("title")) errors.push({ line: lineNo, message: `"${semanticId}": missing "Title:".` });
       if (!f.get("statement")) errors.push({ line: lineNo, message: `"${semanticId}": missing "Statement:".` });
+      if (!f.get("source title"))
+        errors.push({ line: lineNo, message: `"${semanticId}": missing "Source Title:" — every fact needs a source a reviewer can look at.` });
       if (!currentFeature)
         errors.push({ line: lineNo, message: `"${semanticId}" has no enclosing "## Feature:" heading.` });
       else if (!currentFeature.description)
@@ -107,7 +109,7 @@ export function parseKnowledgeMarkdown(text) {
           message: `Feature "${currentFeature.name}" needs a "Description:" line the first time it's introduced.`,
         });
 
-      if (typeOk && provenanceOk && f.get("title") && f.get("statement") && currentFeature?.description) {
+      if (typeOk && provenanceOk && f.get("title") && f.get("statement") && f.get("source title") && currentFeature?.description) {
         const sourceTitle = f.get("source title");
         items.push({
           semanticId,

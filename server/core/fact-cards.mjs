@@ -119,7 +119,15 @@ export function openFactCards(db, { knowledge, testbook }) {
       // prefer the approved version; otherwise the latest
       if (!held || row.status === "approved" || (held.status !== "approved" && row.version > held.version)) bySemantic.set(row.semantic_id, row);
     }
-    const flagged = new Set(knowledge.openReviewFlags().map((flag) => flag.knowledge_item_id));
+    // A flag on ANY version of a fact keeps the fact under review (as its card shows),
+    // even after a newer version has been approved, until a person resolves the flag.
+    const flagged = new Set(
+      db.prepare(
+        `SELECT DISTINCT knowledge_items.semantic_id FROM knowledge_review_flags
+         JOIN knowledge_items ON knowledge_items.id = knowledge_review_flags.knowledge_item_id
+         WHERE knowledge_review_flags.status='open'`,
+      ).all().map((row) => row.semantic_id),
+    );
     const featureNames = new Map(db.prepare("SELECT id, name FROM features").all().map((f) => [f.id, f.name]));
     const testCounts = new Map(db.prepare("SELECT knowledge_item_id, COUNT(*) n FROM knowledge_item_tests GROUP BY knowledge_item_id").all().map((r) => [r.knowledge_item_id, r.n]));
     return [...bySemantic.values()]
@@ -129,7 +137,7 @@ export function openFactCards(db, { knowledge, testbook }) {
         title: row.title,
         feature: featureNames.get(row.feature_id) ?? null,
         type: row.type,
-        derivedStatus: derivedStatus(row, flagged.has(row.id) ? 1 : 0),
+        derivedStatus: derivedStatus(row, flagged.has(row.semantic_id) ? 1 : 0),
         provenance: row.provenance,
         authorityKind: isExpectation(row.provenance) ? "expected" : "observed_or_inferred",
         hasSource: row.source_id !== null,

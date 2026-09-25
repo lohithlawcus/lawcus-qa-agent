@@ -273,6 +273,20 @@ test("a fact whose approved version is not its first is represented by that appr
   });
 });
 
+test("a flag on an older version keeps the fact under review in BOTH the list and the card, until it is resolved", () => {
+  withApp(({ knowledge, signals, cards }) => {
+    const v1 = approve(knowledge, knowledge.proposeItem(item()));
+    const signal = signals.submit({ kind: "qa_note", title: "n", body: "b", submittedBy: HUMAN });
+    const flag = signals.flagForReview({ signalId: signal.id, itemId: v1.id, actor: HUMAN });
+    const v2 = approve(knowledge, knowledge.proposeItem(item({ statement: "A newer statement." })));
+    assert.equal(cards.factCard(v2.id).derivedStatus, "under_review");
+    assert.equal(cards.listFacts().find((f) => f.semanticId === "BR-SAMPLE-RULE-001").derivedStatus, "under_review", "the list agrees with the card");
+    signals.resolveFlag({ flagId: flag.id, resolution: "revised", actor: HUMAN });
+    assert.equal(cards.factCard(v2.id).derivedStatus, "current");
+    assert.equal(cards.listFacts().find((f) => f.semanticId === "BR-SAMPLE-RULE-001").derivedStatus, "current");
+  });
+});
+
 // ---------- schema and wiring ----------
 
 test("the migration is recorded, and the routes and the acknowledgement flag are wired", () => {
