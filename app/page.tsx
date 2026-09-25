@@ -193,7 +193,25 @@ type NetworkAuthorityRow = {
   allow_redirects: number;
   status: string;
 };
+type OwnedRecord = {
+  id: string;
+  run_id: string;
+  resource_type: string;
+  resource_id: string;
+  display_name: string | null;
+  cleanup_policy: string;
+  cleanup_status: string;
+  cleanup_note: string | null;
+  openUrl: string | null;
+  created_at: string;
+};
+// Still sitting in staging and waiting on a person. Mirrors the server's
+// definition (resource-ownership.mjs): "retain" was decided on purpose,
+// "cleaned"/"already_missing" are done.
+const isLeftover = (r: OwnedRecord) =>
+  r.cleanup_policy !== "retain" && ["pending", "failed", "skipped"].includes(r.cleanup_status);
 type State = {
+  leftovers: OwnedRecord[];
   environments: { id: string; name: string; url: string; kind: string; execution_enabled: number }[];
   environmentConfirmations: {
     environmentId: string;
@@ -305,6 +323,7 @@ type Detail = Run & {
   clarifications: Question[];
   manifest: Manifest | null;
   cancellable: boolean;
+  resourceOwnership: OwnedRecord[];
   networkObservations: NetworkObservation[];
   consoleObservations: ConsoleObservation[];
 };
@@ -556,6 +575,61 @@ export default function Home() {
       if (detail?.id === id) setDetail(await request<Detail>("/runs/" + id));
       await refresh();
     });
+  }
+  async function resolveLeftover(id: string, verb: "removed" | "keep") {
+    await action(async () => {
+      await request(`/leftovers/${id}/resolve`, { action: verb });
+      setMessage(
+        verb === "removed"
+          ? "Recorded as removed. Nothing was deleted by this app."
+          : "Recorded as kept on purpose.",
+      );
+      if (detail) setDetail(await request<Detail>("/runs/" + detail.id));
+      await refresh();
+    });
+  }
+  function renderOwned(rows: OwnedRecord[], heading: string, note: string) {
+    return (
+      <div className="panel question-panel" data-testid="owned-records">
+        <span className="section-label">{heading}</span>
+        <p className="subtle">{note}</p>
+        {rows.map((r) => (
+          <div className="list-row" key={r.id}>
+            <div>
+              <h3>{r.display_name ?? r.resource_id}</h3>
+              <p className="subtle">
+                {r.resource_type.replaceAll("_", " ")} · {date(r.created_at)}
+                {r.cleanup_note ? ` · ${r.cleanup_note}` : ""}
+              </p>
+              {r.openUrl && (
+                <a href={r.openUrl} target="_blank" rel="noreferrer">
+                  Open in Lawcus
+                </a>
+              )}
+            </div>
+            <div className="inline">
+              {isLeftover(r) ? (
+                <>
+                  <Badge className="status failed" variant="outline">
+                    still in staging
+                  </Badge>
+                  <Button variant="outline" onClick={() => resolveLeftover(r.id, "removed")}>
+                    I removed it
+                  </Button>
+                  <Button variant="outline" onClick={() => resolveLeftover(r.id, "keep")}>
+                    Keep it
+                  </Button>
+                </>
+              ) : (
+                <Badge variant="outline">
+                  {r.cleanup_policy === "retain" ? "kept on purpose" : "removed"}
+                </Badge>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   }
   async function decide(id: string, verb: "approve" | "reject") {
     await action(async () => {
@@ -1066,6 +1140,12 @@ export default function Home() {
                       </span>
                       <span>0 execution model calls</span>
                     </div>
+                    {detail.resourceOwnership?.length > 0 &&
+                      renderOwned(
+                        detail.resourceOwnership,
+                        "RECORDS THIS RUN CREATED",
+                        "This app never deletes anything from Lawcus. Remove any that are still there yourself, then mark them here.",
+                      )}
                     <div className="scenario-list">
                       {detail.results.map((r) => (
                         <div className="result-row" key={r.id}>
@@ -1516,6 +1596,13 @@ export default function Home() {
             </div>
           </TabsContent>
           <TabsContent value="history">
+            {state?.leftovers?.length
+              ? renderOwned(
+                  state.leftovers,
+                  `RECORDS LEFT IN STAGING (${state.leftovers.length})`,
+                  "Created by test runs and still in Lawcus. This app never deletes them: remove them in Lawcus, then mark them here.",
+                )
+              : null}
             <div className="panel">
               {!state?.runs.length ? (
                 <div className="empty-small">

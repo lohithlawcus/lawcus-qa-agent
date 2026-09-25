@@ -4,6 +4,7 @@ import { ApiContractError } from "../core/api-contracts.mjs";
 import { traverseImpactGraph, executeImpactedTest, proposeGapCoverage, planImpactedTest } from "../core/impacted-testing.mjs";
 import { buildNativeRunners, NATIVE_SUITE_MEMBERS } from "../testbook/lawcus-native-cases.mjs";
 import { finalizeRun } from "../core/run-outcome.mjs";
+import { closeOutCleanup } from "../core/run-cleanup.mjs";
 import { checkStagingBudget } from "../core/run-admission.mjs";
 import { currentCodeRevision } from "../core/code-revision.mjs";
 
@@ -167,7 +168,7 @@ function createMcpRun(db, { title, intent, externalIds }) {
  * simulation). Refuses anything not already an approved case; never runs
  * an "unknown primitive" (this is exactly what execute_unknown_primitive
  * in the Never-expose list would be, so there is no path to it here). */
-export async function runApprovedTest({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit }, { externalId }) {
+export async function runApprovedTest({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit, resourceOwnership, cleanupRunner }, { externalId }) {
   const testCase = testbook.findCase(externalId);
   if (!testCase) throw new McpToolError(MCP_ERROR.NOT_FOUND, `No TestBook case with external_id "${externalId}".`);
   if (testCase.status !== "approved")
@@ -182,7 +183,7 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
   const runId = createMcpRun(db, { title: `MCP: ${externalId}`, intent: `run_approved_test(${externalId})`, externalIds: [externalId] });
   // Re-bind now that the real runId exists, since mutation-journal entries
   // must reference it.
-  const boundRunners = buildNativeRunners({ apiContracts, mutationJournal, runId });
+  const boundRunners = buildNativeRunners({ apiContracts, mutationJournal, runId, resourceOwnership });
   const plan = { cells: [{ featureName: testCase.featureName, recordState: "n/a", externalId, covered: true }] };
   let results;
   try {
@@ -190,23 +191,25 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
   } catch (error) {
     // Never leave a default "passed" behind an exception.
     finalizeRun(db, runId, { planned: plan.cells.length, error });
+    await closeOutCleanup({ db, cleanupRunner, runId, audit });
     throw error;
   }
   const verdict = finalizeRun(db, runId, { results });
-  return { runId, outcome: verdict.outcome, results };
+  const cleanup = await closeOutCleanup({ db, cleanupRunner, runId, audit });
+  return { runId, outcome: verdict.outcome, cleanup: cleanup?.overall ?? "unknown", leftovers: cleanup?.leftovers.length ?? null, results };
 }
 
 /** section 41's run_approved_suite — every native case in a known suite
  * (server/testbook/lawcus-native-cases.mjs's NATIVE_SUITE_MEMBERS), or the
  * standard fixed login-essentials plan for that one DSL suite. */
-export async function runApprovedSuite({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit }, { suiteName }) {
+export async function runApprovedSuite({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit, resourceOwnership, cleanupRunner }, { suiteName }) {
   const members = NATIVE_SUITE_MEMBERS[suiteName];
   if (!members)
     throw new McpToolError(MCP_ERROR.NOT_RUNNABLE, `"${suiteName}" is not a suite this MCP server can run yet. Known suites: ${Object.keys(NATIVE_SUITE_MEMBERS).join(", ")}.`);
   ensureNoActiveRun(db);
   ensureWithinRunBudget(db);
   const runId = createMcpRun(db, { title: `MCP suite: ${suiteName}`, intent: `run_approved_suite(${suiteName})`, externalIds: members });
-  const runners = buildNativeRunners({ apiContracts, mutationJournal, runId });
+  const runners = buildNativeRunners({ apiContracts, mutationJournal, runId, resourceOwnership });
   const plan = { cells: members.map((externalId) => {
     const testCase = testbook.findCase(externalId);
     // Runnable = approved AND not quarantined. An unapproved, missing or
@@ -222,10 +225,12 @@ export async function runApprovedSuite({ db, testbook, apiContracts, mutationJou
     results = await executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs: 8000, artifactDirectory, audit });
   } catch (error) {
     finalizeRun(db, runId, { planned: plan.cells.length, error });
+    await closeOutCleanup({ db, cleanupRunner, runId, audit });
     throw error;
   }
   const verdict = finalizeRun(db, runId, { results });
-  return { runId, outcome: verdict.outcome, results };
+  const cleanup = await closeOutCleanup({ db, cleanupRunner, runId, audit });
+  return { runId, outcome: verdict.outcome, cleanup: cleanup?.overall ?? "unknown", leftovers: cleanup?.leftovers.length ?? null, results };
 }
 
 export function getRunStatus({ db }, { runId }) {

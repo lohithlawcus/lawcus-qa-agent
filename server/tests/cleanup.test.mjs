@@ -126,7 +126,7 @@ test("resources are cleaned in reverse dependency order: child before parent", (
   });
 });
 
-test("cleanup_policy='manual' and 'retain' resources are never touched", () => {
+test("cleanup_policy='manual' resources are never touched, and are reported as leftovers — cleanup is NOT 'passed' while they sit in staging", () => {
   return withRunner(async ({ db, resourceOwnership, cleanup }) => {
     const runId = seedRun(db);
     resourceOwnership.recordCreated({
@@ -134,9 +134,24 @@ test("cleanup_policy='manual' and 'retain' resources are never touched", () => {
     });
     const calls = [];
     const result = await cleanup.runCleanup({ runId, deleteHandlers: { contact: async (r) => { calls.push(r.resource_id); } } });
+    assert.deepEqual(calls, [], "a manual record must never be handed to a delete handler");
+    assert.equal(result.overall, "needs_review");
+    assert.deepEqual(result.leftovers.map((r) => r.resource_id), ["manual-1"]);
+    assert.equal(resourceOwnership.forRun(runId)[0].cleanup_status, "pending");
+  });
+});
+
+test("cleanup_policy='retain' resources are never touched and are not leftovers (someone chose to keep them)", () => {
+  return withRunner(async ({ db, resourceOwnership, cleanup }) => {
+    const runId = seedRun(db);
+    resourceOwnership.recordCreated({
+      runId, environmentId: "fixture", resourceType: "contact", resourceId: "keep-1", createdByPrimitive: "contacts.create", cleanupPolicy: "retain",
+    });
+    const calls = [];
+    const result = await cleanup.runCleanup({ runId, deleteHandlers: { contact: async (r) => { calls.push(r.resource_id); } } });
     assert.deepEqual(calls, []);
     assert.equal(result.overall, "passed");
-    assert.equal(resourceOwnership.forRun(runId)[0].cleanup_status, "pending");
+    assert.deepEqual(result.leftovers, []);
   });
 });
 

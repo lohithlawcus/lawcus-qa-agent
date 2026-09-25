@@ -292,6 +292,11 @@ const KNOWN_CONTACT_UUID = "e2bf71a0-ae87-11f1-ab8e-f18331cbd381"; // "QA Batch 
 const KNOWN_CONTACT_COMPANY_UUID = "9f1c75c0-b1d0-11f1-8594-1376676d24eb"; // "QA Agent - <timestamp>" (Company)
 const KNOWN_LEAD_UUID = "c59e9ec0-b115-11f1-b4fe-1feb32eda16d"; // "QA Agent - 1789484203935"
 
+// The QA-owned fixture records other checks depend on. resource-ownership
+// refuses to ever record one of these as created by a run, so no cleanup
+// (manual today, automated later) can be pointed at them.
+export const PROTECTED_RESOURCE_IDS = [KNOWN_CONTACT_UUID, KNOWN_CONTACT_COMPANY_UUID, KNOWN_LEAD_UUID];
+
 /** Builds a {passed, actual, screenshot, reason} outcome for an
  * update-and-restore custom-field check (Contacts and Leads share the
  * exact same four pass/fail conditions and diagnostic fields) — one
@@ -330,68 +335,144 @@ function createOutcome(r, recordKind) {
   };
 }
 
+// Save was clicked but the post-save URL never confirmed a record: the
+// server may or may not have created it. Recorded as a "may exist" leftover
+// (never as proof) so a partial creation is visible instead of vanishing.
+const UNCONFIRMED_CREATE = /Could not determine the created (contact|lead)'s uuid/;
+
+/** Records what a check creates. Everything is recorded with cleanup policy
+ * "manual": deleting records from a shared staging tenant has not been
+ * authorized, so they are reported to a person, never deleted by the tool.
+ * With no resourceOwnership (a minimal context) recording is a no-op. */
+function ownershipTracker({ resourceOwnership, runId }) {
+  const record = (fields) =>
+    resourceOwnership?.recordCreated({ runId, environmentId: "lawcus", cleanupPolicy: "manual", ...fields });
+  return {
+    created(resourceType, resourceId, createdByPrimitive, displayName) {
+      if (resourceId) record({ resourceType, resourceId, createdByPrimitive, displayName });
+    },
+    async track(kind, createdByPrimitive, displayName, run) {
+      try {
+        return await run();
+      } catch (error) {
+        if (UNCONFIRMED_CREATE.test(String(error?.message))) {
+          try {
+            record({
+              resourceType: `${kind}_unconfirmed`,
+              resourceId: `unconfirmed:${runId}:${createdByPrimitive}`,
+              createdByPrimitive,
+              displayName: `MAY EXIST — search Lawcus for "${displayName}"`,
+            });
+          } catch (recordError) {
+            error.message += ` (Also failed to record a possible leftover record: ${recordError.message})`;
+          }
+        }
+        throw error;
+      }
+    },
+  };
+}
+
 /**
  * The single, shared wiring from a native case's external_id to the real
  * function that executes it — used by both the HTTP /impacted-tests/run
  * route and Step 18's MCP run_approved_test/run_approved_suite tools, so
  * there is exactly one place this mapping is defined, never two copies
  * that could drift apart.
+ *
+ * `impl` overrides the live check functions (tests only — the defaults are
+ * the real browser-driven checks).
  */
-export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
+export function buildNativeRunners({ apiContracts, mutationJournal, runId, resourceOwnership = null, impl = {} }) {
   const ts = Date.now();
+  const fn = {
+    runContactCustomFieldCheck,
+    runContactCreationCheck,
+    runContactMandatoryFieldValidationCheck,
+    runContactAllFieldsCreationCheck,
+    runContactPhoneValidationCheck,
+    runContactBillingRateValidationCheck,
+    runContactCompanyCreationCheck,
+    runContactCompanyMandatoryFieldValidationCheck,
+    runLeadCustomFieldCheck,
+    runLeadCreationCheck,
+    runLeadMandatoryFieldValidationCheck,
+    ...impl,
+  };
+  const own = ownershipTracker({ resourceOwnership, runId });
   return {
     "contacts.custom_field_update_existing": async () => {
-      const r = await runContactCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_CONTACT_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
+      const r = await fn.runContactCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_CONTACT_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
       return customFieldUpdateOutcome(r);
     },
     "contacts.create_new_verifies_custom_fields": async () => {
-      const r = await runContactCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts) });
+      const name = `QA Agent ${ts}`;
+      const r = await own.track("contact", "contacts.create_new_verifies_custom_fields", name, () =>
+        fn.runContactCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts) }));
+      own.created("contact", r.uuid, "contacts.create_new_verifies_custom_fields", name);
       return createOutcome(r, "contact");
     },
     "contacts.create_mandatory_field_validation": async () => {
-      const r = await runContactMandatoryFieldValidationCheck();
+      const r = await fn.runContactMandatoryFieldValidationCheck();
       return { passed: r.messageCount === 2 && r.noContactCreated, actual: JSON.stringify(r) };
     },
     "contacts.create_all_fields_verified_on_detail_page": async () => {
-      const r = await runContactAllFieldsCreationCheck({ apiContracts, marker: `QAFieldTest${ts}` });
+      const marker = `QAFieldTest${ts}`;
+      const r = await own.track("contact", "contacts.create_all_fields_verified_on_detail_page", marker, () =>
+        fn.runContactAllFieldsCreationCheck({ apiContracts, marker }));
+      own.created("contact", r.uuid, "contacts.create_all_fields_verified_on_detail_page", `${marker} Contact`);
       return {
         passed: r.correlation.contractMatch && r.correlation.cardinalityOk && r.missing.length === 0,
         actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch, missing: r.missing, picked: r.picked }),
       };
     },
     "contacts.create_phone_number_validation": async () => {
-      const r = await runContactPhoneValidationCheck();
+      const r = await fn.runContactPhoneValidationCheck();
       return { passed: r.invalidMessageShown && r.noContactCreated, actual: JSON.stringify(r) };
     },
     "contacts.create_billing_rate_required_validation": async () => {
-      const r = await runContactBillingRateValidationCheck();
+      const r = await fn.runContactBillingRateValidationCheck();
+      // This check saves a real contact on purpose (the "fill Fixed rate and
+      // succeed" half) — and if the blocked half wrongly created one, that
+      // one is a leftover too.
+      own.created("contact", r.uuid, "contacts.create_billing_rate_required_validation", "QA Validation Test");
+      own.created("contact", r.blockedCreatedUuid, "contacts.create_billing_rate_required_validation", "QA Validation Test (created when it should have been blocked)");
       return {
         passed: r.blockedMessageCount >= 1 && r.noContactCreatedWhenBlank && r.createdAfterFilling && r.rateShownCorrectly,
         actual: JSON.stringify(r),
       };
     },
     "contacts.create_new_company_verifies_custom_fields": async () => {
-      const r = await runContactCompanyCreationCheck({ apiContracts, name: `QA Agent - ${ts}` });
+      const name = `QA Agent - ${ts}`;
+      const r = await own.track("contact", "contacts.create_new_company_verifies_custom_fields", name, () =>
+        fn.runContactCompanyCreationCheck({ apiContracts, name }));
+      own.created("contact", r.uuid, "contacts.create_new_company_verifies_custom_fields", `${name} (Company)`);
       return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
     },
     "contacts.create_company_mandatory_field_validation": async () => {
-      const r = await runContactCompanyMandatoryFieldValidationCheck();
+      const r = await fn.runContactCompanyMandatoryFieldValidationCheck();
       return { passed: r.messageCount === 1 && r.noContactCreated, actual: JSON.stringify(r) };
     },
     "contacts.custom_field_update_existing_company": async () => {
-      const r = await runContactCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_CONTACT_COMPANY_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
+      const r = await fn.runContactCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_CONTACT_COMPANY_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
       return customFieldUpdateOutcome(r);
     },
     "leads.custom_field_update_existing": async () => {
-      const r = await runLeadCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_LEAD_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
+      const r = await fn.runLeadCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_LEAD_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
       return customFieldUpdateOutcome(r);
     },
     "leads.create_new_verifies_custom_fields": async () => {
-      const r = await runLeadCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts + 1), matterName: `QA Agent - ${ts + 1}` });
+      const name = `QA Agent ${ts + 1}`;
+      const matterName = `QA Agent - ${ts + 1}`;
+      const r = await own.track("lead", "leads.create_new_verifies_custom_fields", name, () =>
+        fn.runLeadCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts + 1), matterName }));
+      // Creating a lead also creates its potential-client contact and matter.
+      // Only the lead's own id is captured; those linked records are not.
+      own.created("lead", r.uuid, "leads.create_new_verifies_custom_fields", `${name} — matter "${matterName}" (its linked contact/matter records are not tracked)`);
       return createOutcome(r, "lead");
     },
     "leads.create_mandatory_field_validation": async () => {
-      const r = await runLeadMandatoryFieldValidationCheck();
+      const r = await fn.runLeadMandatoryFieldValidationCheck();
       return { passed: r.messageCount === 2 && r.stayedOnStep1 && r.noLeadCreated, actual: JSON.stringify(r) };
     },
   };

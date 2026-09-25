@@ -689,7 +689,7 @@ export async function verifyBillingRateRequiredValidationViaBrowser({ context })
   // attempt leaves behind, and matches a real user's behavior at least as
   // well as retrying inside the same broken form would.
   const blockedPage = await context.newPage();
-  let blockedMessageCount, noContactCreatedWhenBlank;
+  let blockedMessageCount, noContactCreatedWhenBlank, blockedCreatedUuid = null;
   try {
     await openNewContactDialog(blockedPage);
     const dialog = contactDialog(blockedPage);
@@ -699,7 +699,9 @@ export async function verifyBillingRateRequiredValidationViaBrowser({ context })
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await blockedPage.waitForTimeout(1000);
     blockedMessageCount = await blockedPage.getByText(REQUIRED_FIELD_MESSAGE, { exact: true }).count();
-    noContactCreatedWhenBlank = !/\/contact\/[a-f0-9-]{36}/.test(blockedPage.url());
+    const blockedMatch = blockedPage.url().match(/\/contact\/([a-f0-9-]{36})/);
+    noContactCreatedWhenBlank = !blockedMatch;
+    blockedCreatedUuid = blockedMatch?.[1] ?? null;
   } finally {
     await blockedPage.close().catch(() => {});
   }
@@ -725,6 +727,7 @@ export async function verifyBillingRateRequiredValidationViaBrowser({ context })
       noContactCreatedWhenBlank,
       createdAfterFilling: !!match,
       uuid: match?.[1] ?? null,
+      blockedCreatedUuid,
       rateShownCorrectly,
     };
   } finally {
