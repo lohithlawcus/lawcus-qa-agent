@@ -41,6 +41,7 @@ import { buildRunManifest, ManifestError } from "./core/manifest.mjs";
 import { resolveIntent } from "./core/intent.mjs";
 import { openKnowledge } from "./core/knowledge.mjs";
 import { openChangeSignals, SIGNAL_KINDS } from "./core/change-signals.mjs";
+import { openFactCards } from "./core/fact-cards.mjs";
 import { seedLawcusKnowledge } from "./knowledge/lawcus-seed.mjs";
 import { openApiContracts } from "./core/api-contracts.mjs";
 import { seedLawcusApiContracts } from "./api-contracts/lawcus-seed.mjs";
@@ -104,6 +105,7 @@ testbook.backfillHistory(
 seedLawcusNativeCases(testbook);
 const knowledge = openKnowledge(db, audit);
 const changeSignals = openChangeSignals(db, audit, { knowledge, testbook });
+const factCards = openFactCards(db, { knowledge, testbook });
 // V5 Step 9 — proposes the real, sourced Contacts/Leads/Contact Custom
 // Fields extraction and the self-verified Authentication items. Every
 // item/edge lands as pending_review; nothing here approves anything.
@@ -886,17 +888,41 @@ const server = createServer(
       );
       if (req.method === "POST" && knowledgeItemDecision) {
         const [, id, verb] = knowledgeItemDecision;
-        const input = DecisionRequest.parse(await body(req));
-        const result =
-          verb === "approve"
-            ? knowledge.approveItem(id, approverIdentity, input.note ?? null)
-            : knowledge.rejectItem(id, approverIdentity, input.note ?? null);
-        json(res, 200, { status: result.status });
+        // acceptLowerAuthority lets a person knowingly approve weaker evidence
+        // (observed/inferred/assumed) over a documented or product-approved
+        // fact; it needs a note saying why.
+        const input = z.object({ note: z.string().trim().min(1).max(1000).optional(), acceptLowerAuthority: z.boolean().optional() }).strict().parse(await body(req));
+        try {
+          const result =
+            verb === "approve"
+              ? knowledge.approveItem(id, approverIdentity, input.note ?? null, { acceptLowerAuthority: input.acceptLowerAuthority === true })
+              : knowledge.rejectItem(id, approverIdentity, input.note ?? null);
+          json(res, 200, { status: result.status });
+        } catch (error) {
+          if (error?.code === "lower_authority") { json(res, 409, { error: error.message, code: error.code }); return; }
+          throw error;
+        }
         return;
       }
       if (req.method === "POST" && pathname === "/knowledge/duplicates/collapse") {
         const input = z.object({ apply: z.boolean().default(false) }).strict().parse(await body(req));
         json(res, 200, knowledge.collapseDuplicates({ approver: approverIdentity, apply: input.apply }));
+        return;
+      }
+      // KB-03 reviewer views. Read-only.
+      if (req.method === "GET" && (pathname === "/knowledge/facts" || pathname.startsWith("/knowledge/facts/"))) {
+        if (pathname === "/knowledge/facts") {
+          const query = new URL(req.url, "http://127.0.0.1:4319").searchParams;
+          json(res, 200, { facts: factCards.listFacts({ status: query.get("status"), feature: query.get("feature") }), unsourced: factCards.unsourcedFacts().length });
+          return;
+        }
+        const card = factCards.factCard(decodeURIComponent(pathname.slice("/knowledge/facts/".length)));
+        if (!card) { json(res, 404, { error: "That Knowledge item could not be found." }); return; }
+        json(res, 200, { fact: card });
+        return;
+      }
+      if (req.method === "GET" && pathname === "/knowledge/unsourced") {
+        json(res, 200, { facts: factCards.unsourcedFacts() });
         return;
       }
       // KB-05 change loop. Recording, analysing and proposing only: nothing
@@ -1043,7 +1069,9 @@ const server = createServer(
           return;
         }
         const plan = planImpactedTest({ intent: input.intent, knowledge, testbook });
-        if (!plan.matched) { json(res, 200, { plan, results: [], filedProposals: [] }); return; }
+        // A plan that is not matched, or is blocked (a prerequisite is missing, a
+        // cycle, nothing runnable), is shown but never run.
+        if (!plan.matched || plan.status === "blocked") { json(res, 200, { plan, results: [], filedProposals: [] }); return; }
         // Same staging run budget as /runs and MCP — every cell is a real login
         // from the one shared QA account.
         const impactedBudget = checkStagingBudget(db, "lawcus");

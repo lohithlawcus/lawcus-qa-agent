@@ -250,6 +250,14 @@ export function openStore(directory) {
       db.exec("COMMIT");
     } catch (error) { db.exec("ROLLBACK"); throw error; }
   }
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=24").get()) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(readFileSync(new URL("../migrations/024_fact_scope.sql", import.meta.url), "utf8"));
+      db.prepare("INSERT INTO schema_migrations VALUES(24,?)").run(now());
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+  }
   // AI is enabled by default — the Gate's whole job is auditing/permitting
   // real usage, not silently turning it off. INSERT OR IGNORE means this
   // never overwrites an operator's own choice on a later startup.

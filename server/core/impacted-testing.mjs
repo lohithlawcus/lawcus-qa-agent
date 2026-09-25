@@ -5,6 +5,7 @@ import { sealEvidence } from "./setup.mjs";
 import { takeEvidence } from "./evidence.mjs";
 import { redactText, safeErrorMessage } from "./redact.mjs";
 import { classifyThrown, classifyReportedFailure } from "./failure-class.mjs";
+import { planFromKnowledge } from "./graph-planner.mjs";
 import { now } from "./store.mjs";
 
 // V5 Step 16 — Natural-Language Impacted Testing (master spec Step 16;
@@ -112,7 +113,12 @@ export function planImpactedTest({ intent, knowledge, testbook }) {
   const normalizedIntent = normalizeIntent(intent);
   const pattern = KNOWN_IMPACT_PATTERNS.find((p) => p.test(normalizedIntent));
   if (!pattern) {
-    return { normalizedIntent, matched: false, features: [], knowledgeItems: [], reviewFlags: [], cells: [], gaps: [] };
+    // No hand-written pattern fits. Try the approved knowledge: a request that
+    // names a feature is planned from its directed dependencies, or comes back
+    // with review requests explaining what is missing. Never a guessed run.
+    const graph = planFromKnowledge({ intent, knowledge, testbook });
+    if (graph.matched) return graph;
+    return { normalizedIntent, matched: false, features: [], knowledgeItems: [], reviewFlags: [], cells: [], gaps: [], reviewRequests: graph.reviewRequests };
   }
 
   const approvedEdges = knowledge.approvedGraph();

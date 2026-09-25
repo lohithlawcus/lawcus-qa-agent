@@ -440,6 +440,14 @@ export const EDGES = [
     ),
   },
   {
+    type: "DEPENDS_ON",
+    fromFeatureName: "Matters",
+    toFeatureName: "Contacts",
+    rationale:
+      "A Matter needs a client Contact: the New Matter dialog's Client field is mandatory, and a Matter created for a contact lists that contact as its client (observed live).",
+    source: { title: "Live creation of a Matter for a QA contact on Fiveriverz, 2026-09-26" },
+  },
+  {
     type: "AFFECTS",
     fromFeatureName: "Leads",
     toFeatureName: "Contacts",
@@ -482,15 +490,25 @@ const FEATURES = {
  * this way) — any item above with relatedTests needs those TestBook rows
  * to exist first, since knowledge_item_tests.test_case_external_id is a
  * real FK. */
+// The Authentication items were verified by this project's own login suite
+// rather than taken from a document, so their evidence is that suite. This is
+// deliberately NOT a default for every feature: an item that forgets its source
+// should fail loudly, not quietly claim to be self-verified.
+const AUTHENTICATION_SOURCE = { title: "Verified by this project's own Login suite implementation and its live staging runs" };
+
 export function seedLawcusKnowledge(knowledge) {
   for (const [featureName, { description, items }] of Object.entries(FEATURES)) {
     for (const item of items) {
       knowledge.proposeItem({
         ...item,
+        ...(!item.source && featureName === "Authentication" ? { source: AUTHENTICATION_SOURCE } : {}),
         featureName,
         featureDescription: description,
       });
     }
   }
+  // The Matters feature is normally created when the native cases are seeded;
+  // make sure it exists so its proposed edge can be recorded either way.
+  knowledge.ensureFeature("Matters", "Legal matters (cases) in Lawcus, each linked to a client Contact.");
   for (const edge of EDGES) knowledge.proposeEdge(edge);
 }

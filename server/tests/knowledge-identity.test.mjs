@@ -20,7 +20,7 @@ function withStore(fn) {
 
 const item = (over = {}) => ({
   semanticId: "BR-SAMPLE-RULE-001", type: "BUSINESS_RULE", featureName: "Sample Feature", featureDescription: "d",
-  title: "Sample rule", statement: "The sample rule statement.", provenance: "DOCUMENTED", ...over,
+  title: "Sample rule", statement: "The sample rule statement.", provenance: "DOCUMENTED", source: { title: "Test source" }, ...over,
 });
 const count = (db, where = "1=1") => db.prepare(`SELECT COUNT(*) n FROM knowledge_items WHERE ${where}`).get().n;
 

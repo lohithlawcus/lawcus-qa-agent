@@ -56,6 +56,7 @@ function seedApprovedKnowledge(knowledge) {
     title: "Renaming a custom field preserves existing values",
     statement: "Renaming a Contact custom field updates the displayed name on existing records without touching the stored value.",
     provenance: "DOCUMENTED",
+    source: { title: "Test source" },
   });
   knowledge.approveItem(item.id, "operator:test");
   return item;
@@ -94,7 +95,7 @@ test("searchLawcusKnowledge finds approved items by text, and only approved ones
     const item = seedApprovedKnowledge(knowledge);
     const pendingOnly = knowledge.proposeItem({
       semanticId: "BR-CF-OTHER-001", type: "BUSINESS_RULE", featureName: "Contact Custom Fields", featureDescription: "d",
-      title: "Some other unapproved rule about renaming", statement: "Some other statement about renaming fields.", provenance: "DOCUMENTED",
+      title: "Some other unapproved rule about renaming", statement: "Some other statement about renaming fields.", provenance: "DOCUMENTED", source: { title: "Test source" },
     });
     const results = searchLawcusKnowledge({ knowledge }, { query: "renam" });
     assert.ok(results.some((r) => r.id === item.id));

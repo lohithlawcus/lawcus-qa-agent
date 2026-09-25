@@ -27,6 +27,7 @@ const BASE_ITEM = {
   title: "Sample rule",
   statement: "The sample rule statement.",
   provenance: "DOCUMENTED",
+  source: { title: "Test source" },
 };
 
 test("proposeItem creates a pending_review item, version 1, and the feature if needed", () => {

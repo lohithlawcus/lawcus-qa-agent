@@ -54,6 +54,47 @@ export const TYPE_PREFIXES = {
 
 export const PROVENANCE_VALUES = ["PRODUCT_APPROVED", "DOCUMENTED", "OBSERVED", "INFERRED", "ASSUMED", "DEPRECATED"];
 
+// How much a kind of evidence outranks another. A statement a product owner
+// approved or that is documented is an EXPECTATION; what was merely seen on a
+// tenant (observed), guessed (inferred) or assumed is weaker, and must not
+// silently replace a stronger fact.
+export const AUTHORITY_RANK = { PRODUCT_APPROVED: 5, DOCUMENTED: 4, OBSERVED: 3, INFERRED: 2, ASSUMED: 1, DEPRECATED: 0 };
+export const isExpectation = (provenance) => provenance === "PRODUCT_APPROVED" || provenance === "DOCUMENTED";
+
+const SCOPE_KEYS = ["roles", "configurations", "tenants", "environments"];
+
+/** A scope is a strict object of name lists, or null (applies everywhere).
+ * Returns the normalized JSON string (or null); throws on anything else so a
+ * typo can never silently widen or narrow where a fact applies. */
+export function validateScope(scope) {
+  if (scope === null || scope === undefined) return null;
+  if (typeof scope !== "object" || Array.isArray(scope))
+    throw new KnowledgeError("invalid_scope", "A scope must be an object such as { roles: [\"admin\"] }.");
+  const out = {};
+  for (const [key, value] of Object.entries(scope)) {
+    if (!SCOPE_KEYS.includes(key))
+      throw new KnowledgeError("invalid_scope", `Unknown scope key "${key}". Allowed: ${SCOPE_KEYS.join(", ")}.`);
+    if (!Array.isArray(value) || value.length === 0 || value.length > 20 || value.some((v) => typeof v !== "string" || !v.trim() || v.length > 100))
+      throw new KnowledgeError("invalid_scope", `Scope "${key}" must be a non-empty list (at most 20) of names.`);
+    out[key] = [...new Set(value.map((v) => v.trim()))];
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null;
+}
+
+/** Does this fact apply in this context ({ roles, configurations, tenants,
+ * environments } — each a name or a list)? An unscoped fact applies
+ * everywhere. A scoped fact applies only when the context names a value it
+ * covers for EVERY key it is scoped by; a context that says nothing about a
+ * scoped key does not qualify (unknown is not "yes"). */
+export function factApplies(item, context = {}) {
+  const scope = typeof item.scope === "string" ? JSON.parse(item.scope) : item.scope;
+  if (!scope) return true;
+  return Object.entries(scope).every(([key, allowed]) => {
+    const have = [].concat(context[key] ?? []);
+    return have.some((value) => allowed.includes(value));
+  });
+}
+
 export function validateSemanticId(type, semanticId) {
   const prefix = TYPE_PREFIXES[type];
   if (!prefix) throw new KnowledgeError("unknown_type", `Unknown Knowledge type: ${type}`);
@@ -210,13 +251,16 @@ export function openKnowledge(db, audit) {
     effectiveFrom = null,
     effectiveUntil = null,
     release = null,
+    scope = null,
     apiContracts = [],
     relatedTests = [],
   }) {
     validateSemanticId(type, semanticId);
+    const scopeJson = validateScope(scope);
     const requestedSemanticId = semanticId;
     const feature = ensureFeature(featureName, featureDescription);
-    const sourceRow = source ? ensureSource(source) : null;
+    // The source is ingested only when a row is really created (below), so a
+    // repeated or refused proposal never adds source rows.
     // A label that was recorded as an alias refers to the item it aliases:
     // proposing under it is a revision of that item, not a new fact.
     const target = resolveSemanticId(semanticId);
@@ -238,14 +282,19 @@ export function openKnowledge(db, audit) {
       audit?.("knowledge.item.duplicate_suppressed", duplicate.id, { requestedSemanticId, existingSemanticId: duplicate.semantic_id, status: duplicate.status });
       return duplicate;
     }
+    // A new fact needs evidence to point at. (An unchanged or duplicate proposal
+    // returned above, so existing facts are never re-checked.)
+    if (!source || typeof source.title !== "string" || !source.title.trim())
+      throw new KnowledgeError("source_required", "A Knowledge item needs a source (at least a title) so a reviewer can see what supports it.");
+    const sourceRow = ensureSource(source);
     const nextVersion = (latest?.version || 0) + 1;
     const id = randomUUID();
     db.prepare(
       `INSERT INTO knowledge_items(
          id,semantic_id,version,type,feature_id,title,statement,does_not_mean,
          provenance,source_id,status,supersedes,created_at,
-         applies_to,preconditions,expected_behavior,effective_from,effective_until,release)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         applies_to,preconditions,expected_behavior,effective_from,effective_until,release,scope)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       id,
       semanticId,
@@ -266,6 +315,7 @@ export function openKnowledge(db, audit) {
       effectiveFrom,
       effectiveUntil,
       release,
+      scopeJson,
     );
     for (const apiSemanticId of apiContracts) linkApiContract(id, apiSemanticId);
     for (const externalId of relatedTests) linkTest(id, externalId);
@@ -317,8 +367,20 @@ export function openKnowledge(db, audit) {
     return { applied: true, retired: retired.length, items: retired };
   }
 
-  function decideItem(id, status, approver, note) {
+  function decideItem(id, status, approver, note, { acceptLowerAuthority = false } = {}) {
     requireHumanApprover(approver);
+    if (status === "approved") {
+      // Weaker evidence must not silently replace a stronger fact: approving an
+      // OBSERVED/INFERRED/ASSUMED revision over a DOCUMENTED or product-approved
+      // one needs an explicit, justified acknowledgement.
+      const candidate = db.prepare("SELECT * FROM knowledge_items WHERE id=? AND status='pending_review'").get(id);
+      const current = candidate && db.prepare("SELECT * FROM knowledge_items WHERE semantic_id=? AND status='approved' AND id<>?").get(candidate.semantic_id, id);
+      if (current && AUTHORITY_RANK[candidate.provenance] < AUTHORITY_RANK[current.provenance] && !(acceptLowerAuthority && note && String(note).trim()))
+        throw new KnowledgeError(
+          "lower_authority",
+          `Approving this ${candidate.provenance} version would replace a ${current.provenance} fact. Say why in the note and confirm you accept lower-authority evidence, or reject it.`,
+        );
+    }
     const at = now();
     const result = db
       .prepare(
@@ -341,7 +403,7 @@ export function openKnowledge(db, audit) {
     return db.prepare("SELECT * FROM knowledge_items WHERE id=?").get(id);
   }
 
-  const approveItem = (id, approver, note) => decideItem(id, "approved", approver, note);
+  const approveItem = (id, approver, note, options) => decideItem(id, "approved", approver, note, options);
   const rejectItem = (id, approver, note) => decideItem(id, "rejected", approver, note);
 
   /**
