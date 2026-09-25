@@ -45,6 +45,11 @@ const RULES = [
   { pattern: /getByPlaceholder\('Search your practice'/, failureClass: "infrastructure", reasonCode: "login_timeout",
     explanation: "Signing in to staging never reached the workspace in time. This is a login or environment problem, not a result about the feature under test." },
 
+  { pattern: /An earlier authentication attempt failed; additional attempts are stopped/, failureClass: "infrastructure", reasonCode: "skipped_after_login_failure",
+    explanation: "This check did not attempt another login because an earlier authentication check failed. It was not run, so nothing is concluded about it." },
+  { pattern: /page\.goto: Timeout \d+ms exceeded/, failureClass: "infrastructure", reasonCode: "page_load_timeout",
+    explanation: "The staging page did not finish loading in time. This is an availability or network problem, not a result about the feature under test." },
+
   { pattern: /net::ERR_BLOCKED_BY_CLIENT/, failureClass: "automation", reasonCode: "request_blocked_by_policy",
     explanation: "One of the page's own requests was blocked by this tool's safety policy. The policy may need a reviewed exception, or the page changed." },
   { pattern: /net::ERR_(?:INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|CONNECTION_\w+|TIMED_OUT|NETWORK_CHANGED|PROXY_\w+|TUNNEL_\w+|EMPTY_RESPONSE)|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket hang up/i, failureClass: "infrastructure", reasonCode: "network_unreachable",
@@ -70,9 +75,46 @@ function fromRule(rule) {
   return { failureClass: rule.failureClass, reasonCode: rule.reasonCode, explanation: rule.explanation };
 }
 
+/** Thrown by a check when it RAN and saw Lawcus behave wrongly (e.g. the
+ * password field was not masked). Distinct from an error that means the check
+ * could not run, so it is the one kind of thrown error that is functional. */
+export class CheckAssertionError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "CheckAssertionError";
+  }
+}
+
+export const EVIDENCE_SAVE_FAILED = {
+  failureClass: "integrity",
+  reasonCode: "evidence_save_failed",
+  explanation: "The check's required encrypted evidence could not be saved, so it cannot be counted as passed. This says nothing about Lawcus.",
+};
+
+/** Classifies a failed scenario of the browser-driven Login suite. The order
+ * matters: a rejected saved account and a skipped check are decided from what
+ * the login request did, before the error text is looked at. The
+ * incorrect-password scenario EXPECTS a 401/403, so that status is never read
+ * as "the saved account was rejected" there. */
+export function classifyLoginFailure({ error, page, loginStatus, scenario, authenticationBlocked = false, loginRequests = 0 }) {
+  if (!page) {
+    return { failureClass: "infrastructure", reasonCode: "browser_unavailable", explanation: "The browser could not create an isolated session for this check." };
+  }
+  if ((loginStatus === 401 || loginStatus === 403) && scenario !== "invalid_password") {
+    return { failureClass: "infrastructure", reasonCode: "credentials_rejected", explanation: "Staging rejected the saved dedicated account. Update it in Environment; further login attempts were stopped. This is not a result about Lawcus." };
+  }
+  if (authenticationBlocked && loginRequests === 0 && ["valid_login", "logout"].includes(scenario)) {
+    return classifyThrown(new Error("An earlier authentication attempt failed; additional attempts are stopped."));
+  }
+  return classifyThrown(error);
+}
+
 /** An error thrown by a check (it could not finish). Anything unrecognised is
  * "unclassified" — never a claim about the product. */
 export function classifyThrown(error) {
+  if (error instanceof CheckAssertionError) {
+    return { failureClass: "functional", reasonCode: "assertion_failed", explanation: "The check ran and Lawcus's behavior did not match what was expected." };
+  }
   const text = String(error?.message ?? error ?? "");
   const rule = RULES.find((candidate) => candidate.pattern.test(text));
   if (rule) return fromRule(rule);
