@@ -40,6 +40,7 @@ import { openTestBook } from "./core/testbook.mjs";
 import { buildRunManifest, ManifestError } from "./core/manifest.mjs";
 import { resolveIntent } from "./core/intent.mjs";
 import { openKnowledge } from "./core/knowledge.mjs";
+import { openChangeSignals, SIGNAL_KINDS } from "./core/change-signals.mjs";
 import { seedLawcusKnowledge } from "./knowledge/lawcus-seed.mjs";
 import { openApiContracts } from "./core/api-contracts.mjs";
 import { seedLawcusApiContracts } from "./api-contracts/lawcus-seed.mjs";
@@ -102,6 +103,7 @@ testbook.backfillHistory(
 // detection has genuine cases to check against.
 seedLawcusNativeCases(testbook);
 const knowledge = openKnowledge(db, audit);
+const changeSignals = openChangeSignals(db, audit, { knowledge, testbook });
 // V5 Step 9 — proposes the real, sourced Contacts/Leads/Contact Custom
 // Fields extraction and the self-verified Authentication items. Every
 // item/edge lands as pending_review; nothing here approves anything.
@@ -896,6 +898,59 @@ const server = createServer(
         const input = z.object({ apply: z.boolean().default(false) }).strict().parse(await body(req));
         json(res, 200, knowledge.collapseDuplicates({ approver: approverIdentity, apply: input.apply }));
         return;
+      }
+      // KB-05 change loop. Recording, analysing and proposing only: nothing
+      // here approves Knowledge or changes a test or an expected result.
+      const signalId = "([a-f0-9-]{36})";
+      const uuidRoute = (suffix) => new RegExp(`^/change-signals/${signalId}${suffix}$`).exec(pathname);
+      if (pathname === "/change-signals" || pathname.startsWith("/change-signals/") || pathname === "/knowledge/stale") {
+        try {
+          if (req.method === "GET" && pathname === "/change-signals") {
+            json(res, 200, { signals: changeSignals.list(), kinds: SIGNAL_KINDS });
+            return;
+          }
+          if (req.method === "GET" && pathname === "/knowledge/stale") {
+            const days = Number(new URL(req.url, "http://127.0.0.1:4319").searchParams.get("days") ?? 90);
+            json(res, 200, { facts: changeSignals.staleFacts({ olderThanDays: Number.isFinite(days) && days > 0 ? days : 90 }) });
+            return;
+          }
+          if (req.method === "POST" && pathname === "/change-signals") {
+            const input = z.object({
+              kind: z.enum(SIGNAL_KINDS), title: z.string(), body: z.string(),
+              source: z.string().optional(), sourceRef: z.string().optional(), occurredAt: z.string().optional(),
+            }).strict().parse(await body(req));
+            const signal = changeSignals.submit({ ...input, submittedBy: approverIdentity });
+            const analyzed = signal.duplicate ? signal : changeSignals.analyze(signal.id);
+            json(res, signal.duplicate ? 200 : 201, { signal: analyzed, duplicate: Boolean(signal.duplicate) });
+            return;
+          }
+          let hit;
+          if (req.method === "GET" && (hit = uuidRoute(""))) { json(res, 200, changeSignals.get(hit[1])); return; }
+          if (req.method === "POST" && (hit = uuidRoute("/analyze"))) { json(res, 200, { signal: changeSignals.analyze(hit[1]) }); return; }
+          if (req.method === "POST" && (hit = uuidRoute("/propose-revision"))) {
+            const input = z.object({ semanticId: z.string(), statement: z.string(), provenance: z.string().optional() }).strict().parse(await body(req));
+            json(res, 200, changeSignals.proposeRevision({ signalId: hit[1], ...input, proposedBy: approverIdentity }));
+            return;
+          }
+          if (req.method === "POST" && (hit = uuidRoute("/flag"))) {
+            const input = z.object({ itemId: z.string(), note: z.string().optional() }).strict().parse(await body(req));
+            json(res, 200, { flag: changeSignals.flagForReview({ signalId: hit[1], ...input, actor: approverIdentity }) });
+            return;
+          }
+          if (req.method === "POST" && (hit = uuidRoute("/dismiss"))) {
+            const input = z.object({ note: z.string().optional() }).strict().parse(await body(req));
+            json(res, 200, { signal: changeSignals.dismiss({ signalId: hit[1], ...input, actor: approverIdentity }) });
+            return;
+          }
+          if (req.method === "POST" && (hit = /^\/change-signals\/flags\/([a-f0-9-]{36})\/resolve$/.exec(pathname))) {
+            const input = z.object({ resolution: z.string(), note: z.string().optional() }).strict().parse(await body(req));
+            json(res, 200, { flag: changeSignals.resolveFlag({ flagId: hit[1], ...input, actor: approverIdentity }) });
+            return;
+          }
+        } catch (error) {
+          if (error?.code === "not_found") { json(res, 404, { error: error.message }); return; }
+          throw error;
+        }
       }
       const knowledgeEdgeDecision = /^\/knowledge\/edges\/([a-f0-9-]{36})\/(approve|reject)$/.exec(
         pathname,
