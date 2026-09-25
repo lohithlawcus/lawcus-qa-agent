@@ -1,4 +1,5 @@
 import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession} from './core/live-runner.mjs';
+import { z } from "zod";
 import { seedLawcusNativeCases, buildNativeRunners, PROTECTED_RESOURCE_IDS } from './testbook/lawcus-native-cases.mjs';
 import { planImpactedTest, proposeGapCoverage, executeImpactedTest } from './core/impacted-testing.mjs';
 import { openPersonas, PersonaRegistration } from './core/personas.mjs';
@@ -889,6 +890,11 @@ const server = createServer(
             ? knowledge.approveItem(id, approverIdentity, input.note ?? null)
             : knowledge.rejectItem(id, approverIdentity, input.note ?? null);
         json(res, 200, { status: result.status });
+        return;
+      }
+      if (req.method === "POST" && pathname === "/knowledge/duplicates/collapse") {
+        const input = z.object({ apply: z.boolean().default(false) }).strict().parse(await body(req));
+        json(res, 200, knowledge.collapseDuplicates({ approver: approverIdentity, apply: input.apply }));
         return;
       }
       const knowledgeEdgeDecision = /^\/knowledge\/edges\/([a-f0-9-]{36})\/(approve|reject)$/.exec(
