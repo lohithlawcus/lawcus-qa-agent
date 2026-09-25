@@ -21,6 +21,7 @@ import {ApiContractError} from './api-contracts.mjs';
 import {CheckAssertionError,classifyLoginFailure,classifyReportedFailure,classifyThrown,EVIDENCE_SAVE_FAILED} from './failure-class.mjs';
 import {finalizeRun,finalizeFromSavedResults} from './run-outcome.mjs';
 import {createMatterForContactViaBrowser,verifyMatterMandatoryFieldValidationViaBrowser} from './matters-browser.mjs';
+import {readTenantLists} from './sweep-browser.mjs';
 // V5 Step 11 / section 23 — which real API request each login scenario is
 // expected to trigger. 'logout' is intentionally absent: no logout API
 // contract exists yet (the response was never actually inspected anywhere
@@ -832,7 +833,7 @@ export function permitMattersRequest(url,method,resourceType,postData){
 }
 // One login, then hand the signed-in context to `work`. Same login/permit/close
 // discipline as runContactCreationCheck, kept in one place for the Matter checks.
-async function withLoggedInMatterContext(work){
+async function withLoggedInContext(permit,work){
  let browser,proxy,context;
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
@@ -842,7 +843,7 @@ async function withLoggedInMatterContext(work){
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{
-   if(!permitMattersRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
+   if(!permit(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
    await route.continue();
   });
   const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
@@ -856,6 +857,7 @@ async function withLoggedInMatterContext(work){
   await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
  }
 }
+const withLoggedInMatterContext=work=>withLoggedInContext(permitMattersRequest,work);
 /** Creates a QA Person contact, then a Matter for it, in ONE signed-in session.
  * `onCreated(kind, uuid)` fires as soon as each record exists so a caller can
  * record ownership even if a later step throws. */
@@ -869,4 +871,23 @@ export async function runMatterCreationForNewContactCheck({apiContracts,firstNam
 }
 export async function runMatterMandatoryFieldValidationCheck(){
  return withLoggedInMatterContext(context=>verifyMatterMandatoryFieldValidationViaBrowser({context}));
+}
+
+// A sweep may only READ. Everything the Contacts/Matters policies allow beyond a
+// plain read (creates, edits, the search boxes) is deliberately absent: the only
+// non-GET requests are the tenant's own list endpoints with a paging body. The
+// app's own PUT /settings/user is refused too, so a sweep leaves no trace on the
+// account beyond signing in.
+const SWEEP_LIST_PATHS=new Set(['/v2/contacts','/v2/matters','/v2/leads']);
+const SWEEP_LIST_BODY_KEYS=new Set(['filters','pagination','multi_sorting','sort']);
+export function permitSweepRequest(url,method,resourceType,postData){
+ if(permitLiveRequest(url,method,resourceType))return true;
+ let u;try{u=new URL(url);}catch{return false;}
+ if(u.protocol!=='https:'||u.username||u.password||u.port||u.origin!==API_ORIGIN)return false;
+ if(method!=='POST'||!SWEEP_LIST_PATHS.has(u.pathname))return false;
+ try{const body=JSON.parse(postData||'');return Boolean(body)&&typeof body==='object'&&!Array.isArray(body)&&'pagination'in body&&Object.keys(body).every(k=>SWEEP_LIST_BODY_KEYS.has(k));}catch{return false;}
+}
+/** Signs in once and reads the tenant's list pages back to `cutoff`. Read-only. */
+export async function runStagingSweepRead({cutoff}){
+ return withLoggedInContext(permitSweepRequest,context=>readTenantLists({context,cutoff}));
 }
