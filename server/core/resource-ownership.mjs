@@ -55,7 +55,21 @@ export function reverseDependencyOrder(rows) {
   return order;
 }
 
-export function openResourceOwnership(db, audit) {
+// A leftover is a record this run created that is still sitting in staging:
+// waiting on a person (cleanup_policy 'manual'), or a cleanup that was
+// skipped or failed. 'retain' means someone decided to keep it on purpose,
+// so it is not a leftover; 'cleaned' and 'already_missing' are done.
+const LEFTOVER_SQL = "cleanup_policy <> 'retain' AND cleanup_status IN ('pending','failed','skipped')";
+
+/**
+ * protectedResourceIds: exact IDs (the QA-owned fixture records other
+ * checks depend on) that can never be recorded as owned — so no cleanup
+ * handler, now or later, can ever be pointed at one, whatever a check
+ * reports.
+ */
+export function openResourceOwnership(db, audit, { protectedResourceIds = [] } = {}) {
+  const protectedIds = new Set(protectedResourceIds);
+
   function recordCreated({
     runId,
     environmentId,
@@ -68,6 +82,8 @@ export function openResourceOwnership(db, audit) {
   }) {
     if (!CLEANUP_POLICIES.has(cleanupPolicy))
       throw new ResourceOwnershipError("unknown_cleanup_policy", `Unknown cleanup policy: ${cleanupPolicy}`);
+    if (protectedIds.has(resourceId))
+      throw new ResourceOwnershipError("protected_resource", `Resource "${resourceId}" is a protected QA fixture and can never be recorded as created (or cleaned up) by a run.`);
     const id = randomUUID();
     try {
       db.prepare(
@@ -88,7 +104,11 @@ export function openResourceOwnership(db, audit) {
         "pending",
         now(),
       );
-    } catch {
+    } catch (error) {
+      // Only a UNIQUE violation means "already owned"; anything else (a
+      // missing run, a bad environment) is a different problem and must
+      // not be mislabeled.
+      if (!/UNIQUE constraint/i.test(String(error?.message))) throw error;
       throw new ResourceOwnershipError(
         "already_owned",
         `A resource of type "${resourceType}" with id "${resourceId}" is already owned by another run.`,
@@ -125,5 +145,32 @@ export function openResourceOwnership(db, audit) {
     return reverseDependencyOrder(rows);
   }
 
-  return { recordCreated, markCleanup, forRun, pendingCleanupForRun };
+  function leftoversForRun(runId) {
+    return db.prepare(`SELECT * FROM resource_ownership WHERE run_id=? AND ${LEFTOVER_SQL} ORDER BY created_at`).all(runId);
+  }
+
+  function allLeftovers(limit = 200) {
+    return db.prepare(`SELECT * FROM resource_ownership WHERE ${LEFTOVER_SQL} ORDER BY created_at DESC LIMIT ?`).all(limit);
+  }
+
+  /** A person deals with a leftover. 'removed' = they deleted it in Lawcus
+   * themselves; 'keep' = they decided to leave it. Nothing here touches
+   * staging — it only records the human decision. */
+  function resolveLeftover(id, { action, actor, note = null }) {
+    if (!["removed", "keep"].includes(action)) throw new ResourceOwnershipError("invalid_action", `Unknown action: ${action}`);
+    const row = db.prepare("SELECT * FROM resource_ownership WHERE id=?").get(id);
+    if (!row) throw new ResourceOwnershipError("not_found", "No such owned record.");
+    if (!db.prepare(`SELECT 1 FROM resource_ownership WHERE id=? AND ${LEFTOVER_SQL}`).get(id))
+      throw new ResourceOwnershipError("not_leftover", "This record is not waiting on anyone.");
+    const detail = note ? `: ${String(note).slice(0, 300)}` : "";
+    if (action === "removed") {
+      db.prepare("UPDATE resource_ownership SET cleanup_status='cleaned',cleanup_note=?,cleaned_at=? WHERE id=?").run(`Removed manually by ${actor}${detail}`, now(), id);
+    } else {
+      db.prepare("UPDATE resource_ownership SET cleanup_policy='retain',cleanup_note=? WHERE id=?").run(`Kept on purpose by ${actor}${detail}`, id);
+    }
+    audit?.("resource.leftover_resolved", id, { action, actor });
+    return db.prepare("SELECT * FROM resource_ownership WHERE id=?").get(id);
+  }
+
+  return { recordCreated, markCleanup, forRun, pendingCleanupForRun, leftoversForRun, allLeftovers, resolveLeftover };
 }

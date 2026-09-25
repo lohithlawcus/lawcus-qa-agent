@@ -9,6 +9,10 @@ import { openTestBook } from "../core/testbook.mjs";
 import { openProposals } from "../core/proposals.mjs";
 import { openApiContracts } from "../core/api-contracts.mjs";
 import { openMutationJournal } from "../core/mutation-journal.mjs";
+import { openResourceOwnership } from "../core/resource-ownership.mjs";
+import { openResourceLocks } from "../core/resource-locks.mjs";
+import { createCleanupRunner } from "../core/cleanup.mjs";
+import { PROTECTED_RESOURCE_IDS } from "../testbook/lawcus-native-cases.mjs";
 import * as tools from "./tools.mjs";
 import { McpToolError } from "./tools.mjs";
 
@@ -37,15 +41,19 @@ const { db, audit } = openStore(directory);
 // diagnostic evidence, not just the one triggered from the app's own UI.
 const artifactDirectory = resolve(directory, "artifacts");
 mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
+const resourceOwnership = openResourceOwnership(db, audit, { protectedResourceIds: PROTECTED_RESOURCE_IDS });
+const mutationJournal = openMutationJournal(db, audit);
 const ctx = {
   db,
   audit,
   artifactDirectory,
+  resourceOwnership,
+  cleanupRunner: createCleanupRunner({ resourceOwnership, mutationJournal, resourceLocks: openResourceLocks(db, audit) }),
   knowledge: openKnowledge(db, audit),
   testbook: openTestBook(db, audit),
   proposals: openProposals(db, audit),
   apiContracts: openApiContracts(db, audit),
-  mutationJournal: openMutationJournal(db, audit),
+  mutationJournal,
 };
 
 const server = new McpServer({ name: "lawcus-qa", version: "1.0.0" });

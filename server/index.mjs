@@ -1,5 +1,5 @@
 import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession} from './core/live-runner.mjs';
-import { seedLawcusNativeCases, buildNativeRunners } from './testbook/lawcus-native-cases.mjs';
+import { seedLawcusNativeCases, buildNativeRunners, PROTECTED_RESOURCE_IDS } from './testbook/lawcus-native-cases.mjs';
 import { planImpactedTest, proposeGapCoverage, executeImpactedTest } from './core/impacted-testing.mjs';
 import { openPersonas, PersonaRegistration } from './core/personas.mjs';
 import { openAuthoringSessions, AuthoringSessionRequest, AuthoringDiscardRequest } from './core/authoring-sessions.mjs';
@@ -27,6 +27,7 @@ import {
   ImpactedTestRequest,
   KnowledgeImportRequest,
   AiGateToggleRequest,
+  LeftoverResolveRequest,
   createPlan,
   validateExecution,
   descriptions,
@@ -50,6 +51,7 @@ import { openResourceLocks } from "./core/resource-locks.mjs";
 import { openMutationJournal } from "./core/mutation-journal.mjs";
 import { createCleanupRunner } from "./core/cleanup.mjs";
 import { finalizeRun } from "./core/run-outcome.mjs";
+import { closeOutCleanup } from "./core/run-cleanup.mjs";
 import { checkStagingBudget } from "./core/run-admission.mjs";
 import { currentCodeRevision } from "./core/code-revision.mjs";
 import { startFixture } from "./fixture.mjs";
@@ -141,7 +143,7 @@ const personas = openPersonas(db, audit);
 // milestone), so cleanup below runs as a real, honest no-op today — the
 // orchestration is wired in now so it's already exercised by every real
 // run rather than bolted on later once there's something to actually clean.
-const resourceOwnership = openResourceOwnership(db, audit);
+const resourceOwnership = openResourceOwnership(db, audit, { protectedResourceIds: PROTECTED_RESOURCE_IDS });
 const resourceLocks = openResourceLocks(db, audit);
 const mutationJournal = openMutationJournal(db, audit);
 const cleanupRunner = createCleanupRunner({ resourceOwnership, mutationJournal, resourceLocks });
@@ -217,6 +219,16 @@ async function body(req, maxBytes = 12000) {
   }
   return JSON.parse(raw || "{}");
 }
+// Where a person can open an owned record in Lawcus to remove it by hand.
+// Only the record kinds this project actually creates; anything else (an
+// unconfirmed creation, an unknown type) has no direct link.
+function ownedRecordUrl(row) {
+  if (row.resource_type === "contact") return `${STAGING}/contact/${row.resource_id}`;
+  if (row.resource_type === "lead") return `${STAGING}/lead/${row.resource_id}`;
+  return null;
+}
+const withOpenUrl = (row) => ({ ...row, openUrl: ownedRecordUrl(row) });
+
 function runDetail(id) {
   const run = db
     .prepare(
@@ -250,7 +262,7 @@ function runDetail(id) {
     cancellable: activeRuns.has(id),
     networkObservations: observed.network,
     consoleObservations: observed.console,
-    resourceOwnership: resourceOwnership.forRun(id),
+    resourceOwnership: resourceOwnership.forRun(id).map(withOpenUrl),
     resourceLocks: resourceLocks.forRun(id),
     mutationJournal: mutationJournal.forRun(id),
   };
@@ -534,6 +546,7 @@ const server = createServer(
             .all(),
           proposals: proposals.inbox("pending_review"),
           testbook: testbook.tree(),
+          leftovers: resourceOwnership.allLeftovers().map(withOpenUrl),
           knowledgeInbox: {
             items: knowledge.inboxItems(),
             edges: knowledge.inboxEdges(),
@@ -981,7 +994,7 @@ const server = createServer(
         db.prepare("INSERT INTO runs(id,runbook_id,status,replay,started_at,code_revision) VALUES(?,?,?,?,?,?)").run(runId, runbookId, "running", 0, now(), currentCodeRevision());
         audit("impacted_test.started", runId, { intent: input.intent, cells: plan.cells.length, gaps: plan.gaps.length });
 
-        const runners = buildNativeRunners({ apiContracts, mutationJournal, runId });
+        const runners = buildNativeRunners({ apiContracts, mutationJournal, runId, resourceOwnership });
 
         let results = [];
         let filedProposals = [];
@@ -994,9 +1007,32 @@ const server = createServer(
         } catch (error) {
           finalizeRun(db, runId, { planned: plan.cells.length, error });
           throw error;
+        } finally {
+          // Cleanup runs however execution ended. It never changes the run's
+          // pass/fail; it records what this run left behind in staging.
+          await closeOutCleanup({ db, cleanupRunner, runId, audit });
         }
         audit("impacted_test.completed", runId, { results: results.length, filedProposals: filedProposals.length });
         json(res, 200, { runId, plan, results, filedProposals });
+        return;
+      }
+      if (req.method === "GET" && pathname === "/leftovers") {
+        json(res, 200, { leftovers: resourceOwnership.allLeftovers().map(withOpenUrl) });
+        return;
+      }
+      // A person records what they did about a record a run left in staging.
+      // This only writes the decision; nothing here touches Lawcus.
+      const leftoverResolve = /^\/leftovers\/([a-f0-9-]{36})\/resolve$/.exec(pathname);
+      if (req.method === "POST" && leftoverResolve) {
+        const input = LeftoverResolveRequest.parse(await body(req));
+        try {
+          const row = resourceOwnership.resolveLeftover(leftoverResolve[1], { action: input.action, actor: approverIdentity, note: input.note });
+          json(res, 200, { leftover: withOpenUrl(row) });
+        } catch (error) {
+          if (error?.code === "not_found") { json(res, 404, { error: error.message }); return; }
+          if (error?.code === "not_leftover") { json(res, 409, { error: error.message }); return; }
+          throw error;
+        }
         return;
       }
       // V5 Upgrade Phase U1 — the AI Gate's own kill switch. Human-only

@@ -70,8 +70,14 @@ export function createCleanupRunner({ resourceOwnership, mutationJournal, resour
 
     resourceLocks.releaseAllForRun(runId);
 
-    const overall = failed.length || restorationFailed.length ? "needs_review" : "passed";
-    return { overall, deleted, failed, restored, restorationFailed };
+    // "Passed" must mean nothing this run created is still sitting in
+    // staging. Records set to manual cleanup (the default for QA-created
+    // records until deletion is explicitly authorized) are never touched
+    // here, and they are exactly what "passed" used to hide: a registry
+    // with nothing recorded, or only manual entries, looked clean.
+    const leftovers = resourceOwnership.leftoversForRun(runId);
+    const overall = leftovers.length || failed.length || restorationFailed.length ? "needs_review" : "passed";
+    return { overall, deleted, failed, restored, restorationFailed, leftovers };
   }
 
   return { runCleanup };

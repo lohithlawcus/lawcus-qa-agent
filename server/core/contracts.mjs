@@ -44,6 +44,11 @@ export const KnowledgeImportRequest = z
   .object({ text: z.string().min(1).max(200000) })
   .strict();
 export const AiGateToggleRequest = z.object({ enabled: z.boolean() }).strict();
+// A person deals with a record a run left in staging: they removed it in
+// Lawcus themselves ("removed"), or decided to keep it ("keep").
+export const LeftoverResolveRequest = z
+  .object({ action: z.enum(["removed", "keep"]), note: z.string().max(300).optional() })
+  .strict();
 export const descriptions = {
   valid_login: {
     title: "Sign in with the dedicated test account",
