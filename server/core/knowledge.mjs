@@ -155,6 +155,45 @@ export function openKnowledge(db, audit) {
    * apiContracts trusts the caller to cite a real semantic_id, same as
    * every other "do not invent" discipline in this project.
    */
+  // Two statements are "the same fact" when they differ only in case, spacing
+  // or a trailing full stop.
+  const normalizeStatement = (text) => String(text).toLowerCase().replace(/\s+/g, " ").trim().replace(/[.\s]+$/, "");
+  const ACTIVE_STATUSES = ["approved", "pending_review", "rejected"];
+  // An item retired by collapseDuplicates is bookkeeping, not a human's
+  // rejection of the statement, so it never counts as the fact's holder.
+  const NOT_RETIRED = "(decision_note IS NULL OR decision_note NOT LIKE 'Duplicate of %')";
+
+  function recordAlias(aliasSemanticId, item, reason) {
+    if (aliasSemanticId === item.semantic_id) return;
+    const inUse = db.prepare("SELECT 1 FROM knowledge_items WHERE semantic_id=?").get(aliasSemanticId);
+    if (inUse) return;
+    db.prepare("INSERT OR IGNORE INTO knowledge_item_aliases(alias_semantic_id,knowledge_item_id,reason,created_at) VALUES(?,?,?,?)")
+      .run(aliasSemanticId, item.id, reason, now());
+  }
+
+  /** The item a semantic_id refers to: its own latest version, or the item it
+   * is an alias of. */
+  function resolveSemanticId(semanticId) {
+    const own = db.prepare("SELECT * FROM knowledge_items WHERE semantic_id=? ORDER BY version DESC LIMIT 1").get(semanticId);
+    if (own) return own;
+    return db.prepare(
+      `SELECT knowledge_items.* FROM knowledge_item_aliases
+       JOIN knowledge_items ON knowledge_items.id = knowledge_item_aliases.knowledge_item_id
+       WHERE alias_semantic_id=?`,
+    ).get(semanticId) ?? null;
+  }
+
+  function findDuplicate(featureId, statement, exceptSemanticId) {
+    const wanted = normalizeStatement(statement);
+    const candidates = db
+      .prepare(
+        `SELECT * FROM knowledge_items WHERE feature_id=? AND semantic_id<>? AND status IN (${ACTIVE_STATUSES.map(() => "?").join(",")}) AND ${NOT_RETIRED}
+         ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'pending_review' THEN 1 ELSE 2 END, created_at`,
+      )
+      .all(featureId, exceptSemanticId, ...ACTIVE_STATUSES);
+    return candidates.find((row) => normalizeStatement(row.statement) === wanted) ?? null;
+  }
+
   function proposeItem({
     semanticId,
     type,
@@ -175,17 +214,29 @@ export function openKnowledge(db, audit) {
     relatedTests = [],
   }) {
     validateSemanticId(type, semanticId);
+    const requestedSemanticId = semanticId;
     const feature = ensureFeature(featureName, featureDescription);
     const sourceRow = source ? ensureSource(source) : null;
-    const latest = db
-      .prepare(
-        "SELECT * FROM knowledge_items WHERE semantic_id=? ORDER BY version DESC LIMIT 1",
-      )
-      .get(semanticId);
-    if (latest && latest.statement === statement) {
+    // A label that was recorded as an alias refers to the item it aliases:
+    // proposing under it is a revision of that item, not a new fact.
+    const target = resolveSemanticId(semanticId);
+    if (target) semanticId = target.semantic_id;
+    const latest = target
+      ? db.prepare("SELECT * FROM knowledge_items WHERE semantic_id=? ORDER BY version DESC LIMIT 1").get(target.semantic_id)
+      : null;
+    if (latest && normalizeStatement(latest.statement) === normalizeStatement(statement)) {
       for (const apiSemanticId of apiContracts) linkApiContract(latest.id, apiSemanticId);
       for (const externalId of relatedTests) linkTest(latest.id, externalId);
       return latest;
+    }
+    // The same statement under a different label is the same fact.
+    const duplicate = findDuplicate(feature.id, statement, semanticId);
+    if (duplicate) {
+      recordAlias(requestedSemanticId, duplicate, "proposed again under a different ID with the same statement");
+      for (const apiSemanticId of apiContracts) linkApiContract(duplicate.id, apiSemanticId);
+      for (const externalId of relatedTests) linkTest(duplicate.id, externalId);
+      audit?.("knowledge.item.duplicate_suppressed", duplicate.id, { requestedSemanticId, existingSemanticId: duplicate.semantic_id, status: duplicate.status });
+      return duplicate;
     }
     const nextVersion = (latest?.version || 0) + 1;
     const id = randomUUID();
@@ -220,6 +271,50 @@ export function openKnowledge(db, audit) {
     for (const externalId of relatedTests) linkTest(id, externalId);
     audit?.("knowledge.item.proposed", id, { semanticId, version: nextVersion, provenance });
     return db.prepare("SELECT * FROM knowledge_items WHERE id=?").get(id);
+  }
+
+  /**
+   * Retires PENDING items that repeat a statement already held by another
+   * item in the same feature (an approved one, an earlier pending one, or a
+   * rejected one). Approved and rejected items are never touched. A retired
+   * item is stored as rejected with a note that says it was a duplicate —
+   * that is bookkeeping, not a judgement on the statement — and it keeps its own row and label. Dry-run by default; applying
+   * needs a human approver, like any decision on Knowledge.
+   */
+  function collapseDuplicates({ approver = null, apply = false } = {}) {
+    if (apply) requireHumanApprover(approver);
+    const rows = db
+      .prepare(`SELECT * FROM knowledge_items WHERE status IN (${ACTIVE_STATUSES.map(() => "?").join(",")}) AND ${NOT_RETIRED} ORDER BY created_at, version`)
+      .all(...ACTIVE_STATUSES);
+    const groups = new Map();
+    for (const row of rows) {
+      const key = `${row.feature_id}|${normalizeStatement(row.statement)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    }
+    const rank = { approved: 0, rejected: 1, pending_review: 2 };
+    const retired = [];
+    for (const members of groups.values()) {
+      if (members.length < 2) continue;
+      const ordered = [...members].sort((a, b) => rank[a.status] - rank[b.status]);
+      const keeper = ordered[0];
+      for (const member of ordered.slice(1)) {
+        if (member.status !== "pending_review") continue;
+        retired.push({ id: member.id, semanticId: member.semantic_id, duplicateOf: keeper.id, keeperSemanticId: keeper.semantic_id, keeperStatus: keeper.status });
+      }
+    }
+    if (!apply || !retired.length) return { applied: false, wouldRetire: retired.length, retired };
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const at = now();
+      for (const item of retired) {
+        db.prepare("UPDATE knowledge_items SET status='rejected',decided_by=?,decided_at=?,decision_note=? WHERE id=? AND status='pending_review'")
+          .run(approver, at, `Duplicate of ${item.keeperSemanticId} (${item.duplicateOf}); retired as a duplicate, not reviewed on its merits.`, item.id);
+      }
+      audit?.("knowledge.duplicates_collapsed", randomUUID(), { approver, count: retired.length });
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    return { applied: true, retired: retired.length, items: retired };
   }
 
   function decideItem(id, status, approver, note) {
@@ -399,6 +494,8 @@ export function openKnowledge(db, audit) {
     inboxItems,
     inboxEdges,
     approvedByFeature,
+    collapseDuplicates,
+    resolveSemanticId,
     linkApiContract,
     linkTest,
     itemLinks,
