@@ -1,4 +1,4 @@
-import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession} from './core/live-runner.mjs';
+import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession,runStagingSweepRead} from './core/live-runner.mjs';
 import { z } from "zod";
 import { seedLawcusNativeCases, buildNativeRunners, PROTECTED_RESOURCE_IDS } from './testbook/lawcus-native-cases.mjs';
 import { planImpactedTest, proposeGapCoverage, executeImpactedTest } from './core/impacted-testing.mjs';
@@ -42,6 +42,7 @@ import { resolveIntent } from "./core/intent.mjs";
 import { openKnowledge } from "./core/knowledge.mjs";
 import { openChangeSignals, SIGNAL_KINDS } from "./core/change-signals.mjs";
 import { openFactCards } from "./core/fact-cards.mjs";
+import { openStagingSweeps, REVIEW_STATUSES } from "./core/staging-sweep.mjs";
 import { seedLawcusKnowledge } from "./knowledge/lawcus-seed.mjs";
 import { openApiContracts } from "./core/api-contracts.mjs";
 import { seedLawcusApiContracts } from "./api-contracts/lawcus-seed.mjs";
@@ -56,7 +57,7 @@ import { createCleanupRunner } from "./core/cleanup.mjs";
 import { finalizeRun } from "./core/run-outcome.mjs";
 import { closeOutCleanup } from "./core/run-cleanup.mjs";
 import { sanitizeErrorBody, safeErrorMessage } from "./core/redact.mjs";
-import { checkStagingBudget } from "./core/run-admission.mjs";
+import { checkStagingBudget, stagingBusy } from "./core/run-admission.mjs";
 import { currentCodeRevision } from "./core/code-revision.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
@@ -150,6 +151,7 @@ const personas = openPersonas(db, audit);
 // orchestration is wired in now so it's already exercised by every real
 // run rather than bolted on later once there's something to actually clean.
 const resourceOwnership = openResourceOwnership(db, audit, { protectedResourceIds: PROTECTED_RESOURCE_IDS });
+const stagingSweeps = openStagingSweeps(db, audit, { protectedResourceIds: PROTECTED_RESOURCE_IDS });
 const resourceLocks = openResourceLocks(db, audit);
 const mutationJournal = openMutationJournal(db, audit);
 const cleanupRunner = createCleanupRunner({ resourceOwnership, mutationJournal, resourceLocks });
@@ -353,11 +355,11 @@ const server = createServer(
       return;
     }
     try {
-      if(req.method==='POST'&&pathname==='/runner/check'){if(connecting()||checkingBrowser||db.prepare("SELECT 1 FROM runs WHERE status='running'").get()){json(res,409,{error:'A runner operation is already active.'});return;}checkingBrowser=true;try{browserStatus=await checkBrowser();json(res,200,browserStatus);}finally{checkingBrowser=false;}return;}
+      if(req.method==='POST'&&pathname==='/runner/check'){if(connecting()||checkingBrowser||stagingBusy(db)){json(res,409,{error:'A runner operation is already active.'});return;}checkingBrowser=true;try{browserStatus=await checkBrowser();json(res,200,browserStatus);}finally{checkingBrowser=false;}return;}
       if(req.method==='GET'&&pathname==='/setup/browser-login'){json(res,200,connection);return;}
       if(req.method==='POST'&&pathname==='/setup/browser-login/cancel'){connectionController?.abort();json(res,200,{message:'Cancelling visible sign-in.'});return;}
       if(req.method==='POST'&&pathname==='/setup/browser-login'){
-        if(connecting()||savingCredentials||checkingBrowser||db.prepare("SELECT 1 FROM runs WHERE status='running'").get()){json(res,409,{error:'Wait for the current operation to finish.'});return;}
+        if(connecting()||savingCredentials||checkingBrowser||stagingBusy(db)){json(res,409,{error:'Wait for the current operation to finish.'});return;}
         const recent=db.prepare("SELECT COUNT(*) n FROM audit_events WHERE action='setup.visible-login-started' AND created_at>?").get(new Date(Date.now()-600000).toISOString());
         if(recent.n>=3){json(res,429,{error:'Three visible connection checks were started in ten minutes. Please wait before another.'});return;}
         audit('setup.visible-login-started','lawcus');
@@ -377,7 +379,7 @@ const server = createServer(
         // credential may only be set by the visible sign-in flow below,
         // after Playwright itself confirms the resulting identity.
         if(input.kind==='lawcus-persona'){json(res,400,{error:'Persona accounts must be verified through visible sign-in, not saved directly.'});return;}
-        if(connecting()||savingCredentials||db.prepare("SELECT 1 FROM runs WHERE status='running'").get()){json(res,409,{error:'Wait for the active operation before changing credentials.'});return;}
+        if(connecting()||savingCredentials||stagingBusy(db)){json(res,409,{error:'Wait for the active operation before changing credentials.'});return;}
         savingCredentials=true;try{const result=await saveCredentials(input);audit('setup.credential-saved',input.kind,{storage:'macOS Keychain',...(input.kind==='lawcus'?{environmentId:input.environmentId}:input.kind==='lawcus-persona'?{account:input.account}:{})});json(res,200,result);}finally{savingCredentials=false;}return;
       }
       if(req.method==='POST'&&pathname==='/personas'){
@@ -389,7 +391,7 @@ const server = createServer(
       if(req.method==='POST'&&pathname==='/personas/verify/cancel'){personaConnectionController?.abort();json(res,200,{message:'Cancelling persona sign-in.'});return;}
       const personaVerify=/^\/personas\/([a-f0-9-]{36})\/verify$/.exec(pathname);
       if(req.method==='POST'&&personaVerify){
-        if(personaConnecting()||db.prepare("SELECT 1 FROM runs WHERE status='running'").get()){json(res,409,{error:'Wait for the current operation to finish.'});return;}
+        if(personaConnecting()||stagingBusy(db)){json(res,409,{error:'Wait for the current operation to finish.'});return;}
         const recent=db.prepare("SELECT COUNT(*) n FROM audit_events WHERE action='persona.visible-login-started' AND created_at>?").get(new Date(Date.now()-600000).toISOString());
         if(recent.n>=3){json(res,429,{error:'Three visible persona sign-ins were started in ten minutes. Please wait before another.'});return;}
         const personaId=personaVerify[1];
@@ -501,7 +503,7 @@ const server = createServer(
       // scenario — a deliberately wrong password, so the call can never
       // authenticate or mutate anything real.
       if (req.method === "POST" && pathname === "/api-contracts/verify-login") {
-        if (db.prepare("SELECT 1 FROM runs WHERE status='running'").get()) {
+        if (stagingBusy(db)) {
           json(res, 409, { error: "Wait for the active run to finish." });
           return;
         }
@@ -683,7 +685,7 @@ const server = createServer(
           const budget=checkStagingBudget(db,book.environment_id);
           if(!budget.ok){json(res,429,{error:'Three staging runs were started in ten minutes. Please wait before more login attempts.'});return;}
         }else{validateExecution(db.prepare('SELECT * FROM environments WHERE id=?').get(book.environment_id));}
-        if (connecting() || savingCredentials || checkingBrowser || db.prepare("SELECT 1 FROM runs WHERE status='running'").get()) {
+        if (connecting() || savingCredentials || checkingBrowser || stagingBusy(db)) {
           json(res, 409, {
             error:
               "A test is already running. Wait for it to finish before starting another.",
@@ -909,6 +911,49 @@ const server = createServer(
         json(res, 200, knowledge.collapseDuplicates({ approver: approverIdentity, apply: input.apply }));
         return;
       }
+      // A read-only look at what this tool may have left in the staging tenant.
+      // Reads the tenant's own list pages and keeps only records with this tool's
+      // naming; a person decides what each candidate is. Changes nothing in staging.
+      if (pathname === "/sweeps" || pathname.startsWith("/sweeps/")) {
+        try {
+          if (req.method === "GET" && pathname === "/sweeps") {
+            json(res, 200, { sweeps: stagingSweeps.list() });
+            return;
+          }
+          if (req.method === "POST" && pathname === "/sweeps") {
+            z.object({}).strict().parse(await body(req));
+            if (!browserStatus.ready) { json(res, 409, { error: "Check the browser connection in Environment first." }); return; }
+            const login = await keychain("exists", "lawcus-login");
+            if (!login.exists) { json(res, 409, { error: "Save your staging account in Environment first." }); return; }
+            if (connecting() || savingCredentials || checkingBrowser || stagingBusy(db)) {
+              json(res, 409, { error: "A test or another sweep is running. Wait for it to finish before sweeping." });
+              return;
+            }
+            const sweepBudget = checkStagingBudget(db, "lawcus");
+            if (!sweepBudget.ok) { json(res, 429, { error: "Three staging sign-ins were used in ten minutes. Please wait before sweeping." }); return; }
+            const sweepId = stagingSweeps.begin({ environmentId: "lawcus", requestedBy: approverIdentity });
+            void stagingSweeps.run({ sweepId, reader: ({ cutoff }) => runStagingSweepRead({ cutoff }) });
+            json(res, 202, { sweepId });
+            return;
+          }
+          let hit;
+          if (req.method === "GET" && (hit = /^\/sweeps\/([a-f0-9-]{36})$/.exec(pathname))) {
+            const sweep = stagingSweeps.get(hit[1]);
+            if (!sweep) { json(res, 404, { error: "That sweep could not be found." }); return; }
+            json(res, 200, { sweep });
+            return;
+          }
+          if (req.method === "POST" && (hit = /^\/sweeps\/records\/([a-f0-9-]{36})\/review$/.exec(pathname))) {
+            const input = z.object({ status: z.enum(REVIEW_STATUSES), note: z.string().max(1000).optional() }).strict().parse(await body(req));
+            json(res, 200, { record: stagingSweeps.review(hit[1], { ...input, actor: approverIdentity }) });
+            return;
+          }
+        } catch (error) {
+          if (error?.code === "not_found") { json(res, 404, { error: error.message }); return; }
+          if (error?.code === "sweep_running") { json(res, 409, { error: error.message }); return; }
+          throw error;
+        }
+      }
       // KB-03 reviewer views. Read-only.
       if (req.method === "GET" && (pathname === "/knowledge/facts" || pathname.startsWith("/knowledge/facts/"))) {
         if (pathname === "/knowledge/facts") {
@@ -1064,7 +1109,7 @@ const server = createServer(
         if (!login.exists) { json(res, 409, { error: "Save your staging account in Environment first." }); return; }
         const recent = db.prepare("SELECT COUNT(*) n FROM runs JOIN runbooks ON runbooks.id=runs.runbook_id WHERE runbooks.environment_id='lawcus' AND runs.started_at>?").get(new Date(Date.now() - 600000).toISOString());
         if (recent.n >= 3) { json(res, 429, { error: "Three staging runs were started in ten minutes. Please wait before more." }); return; }
-        if (connecting() || savingCredentials || checkingBrowser || db.prepare("SELECT 1 FROM runs WHERE status='running'").get()) {
+        if (connecting() || savingCredentials || checkingBrowser || stagingBusy(db)) {
           json(res, 409, { error: "A test is already running. Wait for it to finish before starting another." });
           return;
         }

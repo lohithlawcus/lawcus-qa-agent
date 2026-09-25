@@ -7,7 +7,7 @@ import { KnowledgeError } from "../core/knowledge.mjs";
 import { buildNativeRunners, NATIVE_SUITE_MEMBERS } from "../testbook/lawcus-native-cases.mjs";
 import { finalizeRun } from "../core/run-outcome.mjs";
 import { closeOutCleanup } from "../core/run-cleanup.mjs";
-import { checkStagingBudget } from "../core/run-admission.mjs";
+import { checkStagingBudget, stagingBusy } from "../core/run-admission.mjs";
 import { currentCodeRevision } from "../core/code-revision.mjs";
 
 // V5 Step 18 / master spec section 41 — Safe Lawcus QA MCP. Every function
@@ -148,7 +148,7 @@ function ensureWithinRunBudget(db) {
 }
 
 function ensureNoActiveRun(db) {
-  if (db.prepare("SELECT 1 FROM runs WHERE status='running'").get())
+  if (stagingBusy(db))
     throw new McpToolError(MCP_ERROR.ALREADY_RUNNING, "A test is already running. Wait for it to finish before starting another.");
 }
 

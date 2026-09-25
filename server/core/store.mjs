@@ -258,6 +258,14 @@ export function openStore(directory) {
       db.exec("COMMIT");
     } catch (error) { db.exec("ROLLBACK"); throw error; }
   }
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=25").get()) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(readFileSync(new URL("../migrations/025_staging_sweeps.sql", import.meta.url), "utf8"));
+      db.prepare("INSERT INTO schema_migrations VALUES(25,?)").run(now());
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+  }
   // AI is enabled by default — the Gate's whole job is auditing/permitting
   // real usage, not silently turning it off. INSERT OR IGNORE means this
   // never overwrites an operator's own choice on a later startup.
@@ -275,6 +283,11 @@ export function openStore(directory) {
   const stale = db.prepare("SELECT id FROM runs WHERE status='running' AND started_at<?").all(staleCutoff);
   db.prepare(
     "UPDATE runs SET status='interrupted',finished_at=?,summary='The runner stopped before this run completed. Review the partial results before running again.' WHERE status='running' AND started_at<?",
+  ).run(now(), staleCutoff);
+  // Same for a sweep: one left "running" by a crash would otherwise block every
+  // staging run for good.
+  db.prepare(
+    "UPDATE staging_sweeps SET status='failed',finished_at=?,summary='The service stopped before this sweep finished. Nothing was found or changed.' WHERE status='running' AND started_at<?",
   ).run(now(), staleCutoff);
   const audit = (action, entityId, details = {}) =>
     db
