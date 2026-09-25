@@ -18,6 +18,7 @@ import {attachRecorder} from './recorder.mjs';
 import {updateAndRestoreContactCustomFieldViaBrowser,createContactViaBrowser,createCompanyContactViaBrowser,createContactAllFieldsViaBrowser,verifyPhoneNumberValidationViaBrowser,verifyBillingRateRequiredValidationViaBrowser,verifyMandatoryFieldValidationViaBrowser,verifyMandatoryFieldValidationCompanyViaBrowser,VIEWPORT as CONTACTS_VIEWPORT} from './contacts-browser.mjs';
 import {updateAndRestoreLeadCustomFieldViaBrowser,createLeadViaBrowser,verifyLeadMandatoryFieldValidationViaBrowser,VIEWPORT as LEADS_VIEWPORT} from './leads-browser.mjs';
 import {ApiContractError} from './api-contracts.mjs';
+import {createMatterForContactViaBrowser,verifyMatterMandatoryFieldValidationViaBrowser} from './matters-browser.mjs';
 // V5 Step 11 / section 23 — which real API request each login scenario is
 // expected to trigger. 'logout' is intentionally absent: no logout API
 // contract exists yet (the response was never actually inspected anywhere
@@ -814,4 +815,54 @@ export async function runLeadMandatoryFieldValidationCheck(){
  }finally{
   await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
  }
+}
+
+// Contact -> Matter slice (2026-09-26). The write policy is the Contacts one
+// plus exactly one more write: POST /matters (lawcus.matters.create). The New
+// Matter dialog also makes a PUT /settings/user of its own when it opens; that
+// is deliberately NOT allowed — a check must not change the account's settings.
+export function permitMattersRequest(url,method,resourceType,postData){
+ if(permitContactsRequest(url,method,resourceType,postData))return true;
+ let u;try{u=new URL(url);}catch{return false;}
+ return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&u.origin===API_ORIGIN&&method==='POST'&&u.pathname==='/matters';
+}
+// One login, then hand the signed-in context to `work`. Same login/permit/close
+// discipline as runContactCreationCheck, kept in one place for the Matter checks.
+async function withLoggedInMatterContext(work){
+ let browser,proxy,context;
+ try{
+  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
+  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
+  browser=await launch(proxy,false);
+  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
+  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
+  await context.routeWebSocket(/.*/,socket=>socket.close());
+  await context.route('**/*',async route=>{
+   if(!permitMattersRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
+   await route.continue();
+  });
+  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
+  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
+  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
+  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
+  await assertIdentity(page,creds.username);
+  await page.close();
+  return await work(context);
+ }finally{
+  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
+ }
+}
+/** Creates a QA Person contact, then a Matter for it, in ONE signed-in session.
+ * `onCreated(kind, uuid)` fires as soon as each record exists so a caller can
+ * record ownership even if a later step throws. */
+export async function runMatterCreationForNewContactCheck({apiContracts,firstName,lastName,matterName,onCreated=null}){
+ return withLoggedInMatterContext(async context=>{
+  const contact=await createContactViaBrowser({context,apiContracts,firstName,lastName});
+  onCreated?.('contact',contact.uuid);
+  const matter=await createMatterForContactViaBrowser({context,apiContracts,contact:{uuid:contact.uuid,searchText:lastName,displayName:`${firstName} ${lastName}`},matterName,onCreated:uuid=>onCreated?.('matter',uuid)});
+  return {contact,matter};
+ });
+}
+export async function runMatterMandatoryFieldValidationCheck(){
+ return withLoggedInMatterContext(context=>verifyMatterMandatoryFieldValidationViaBrowser({context}));
 }

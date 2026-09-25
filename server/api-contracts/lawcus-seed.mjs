@@ -406,6 +406,63 @@ export const LEADS_CONTRACTS = [
   },
 ];
 
+// The New Matter dialog's create call, observed live on Fiveriverz on
+// 2026-09-26 (a real Matter created for a QA-created Person contact).
+// Unlike lawcus.leads.create, the response is the matter object itself, not
+// wrapped in {matter: ...}. Only fields that were present, typed and stable
+// in that capture are required; everything else the form sends (dates, rates,
+// timekeepers, position) is left unconstrained on purpose.
+export const MATTERS_CONTRACTS = [
+  {
+    semanticId: "lawcus.matters.create",
+    featureName: "Matters",
+    featureDescription: "Legal matters (cases) in Lawcus, each linked to a client Contact.",
+    operation: "Create a new matter for an existing client contact",
+    method: "POST",
+    pathTemplate: "/matters",
+    requestSchema: {
+      type: "object",
+      required: ["name", "client_id", "workflow_id", "stage_id", "billing_type", "custom_fields"],
+      properties: {
+        name: { type: "string" },
+        client_id: { type: "number" },
+        workflow_id: { type: "number" },
+        stage_id: { type: "number" },
+        billing_type: { type: "string" },
+        custom_fields: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["team_custom_field_id", "value"],
+            properties: { team_custom_field_id: { type: "number" }, value: { type: "string" } },
+          },
+        },
+      },
+    },
+    responseSchema: {
+      "200": {
+        type: "object",
+        required: ["id", "uuid", "name", "status", "stage_id"],
+        properties: {
+          id: { type: "number" },
+          uuid: { type: "string" },
+          name: { type: "string" },
+          status: { type: "string" },
+          stage_id: { type: "number" },
+        },
+      },
+    },
+    expectedStatuses: [200],
+    readWrite: "write",
+    verificationRequirements:
+      "The created matter must be independently re-read via GET /matters/:uuid afterward (section 24): its contacts must include the client it was created for.",
+    provenance: "OBSERVED_API",
+    docSource: null,
+    docVersion: null,
+    docDate: null,
+  },
+];
+
 export function seedLawcusApiContracts(apiContracts) {
-  for (const contract of [...AUTHENTICATION_CONTRACTS, ...CONTACTS_CONTRACTS, ...LEADS_CONTRACTS]) apiContracts.proposeContract(contract);
+  for (const contract of [...AUTHENTICATION_CONTRACTS, ...CONTACTS_CONTRACTS, ...LEADS_CONTRACTS, ...MATTERS_CONTRACTS]) apiContracts.proposeContract(contract);
 }
