@@ -265,7 +265,9 @@ test("evidence is saved and recorded as 'saved' when the sealer works", async ()
     assert.equal(db.prepare("SELECT evidence_status FROM scenario_results WHERE id=?").get(results[0].scenarioResultId).evidence_status, "saved");
     assert.equal(db.prepare("SELECT COUNT(*) n FROM artifacts WHERE scenario_result_id=?").get(results[0].scenarioResultId).n, 1);
     assert.equal(readdirSync(artifactDirectory).length, 1);
-    assert.equal(db.prepare("SELECT question FROM clarifications WHERE run_id=?").get(runId).question, "field was wrong");
+    const question = db.prepare("SELECT question FROM clarifications WHERE run_id=?").get(runId).question;
+    assert.ok(question.endsWith(" field was wrong"), "the check's own reason is kept, last");
+    assert.match(question, /\[functional: assertion_failed\]/, "and it is now preceded by the plain-English class and code");
   });
 });
 

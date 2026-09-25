@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { sealEvidence } from "./setup.mjs";
 import { takeEvidence } from "./evidence.mjs";
 import { redactText, safeErrorMessage } from "./redact.mjs";
+import { classifyThrown, classifyReportedFailure } from "./failure-class.mjs";
 import { now } from "./store.mjs";
 
 // V5 Step 16 — Natural-Language Impacted Testing (master spec Step 16;
@@ -227,19 +228,21 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
     if (executedAny && delayBetweenRunsMs > 0) await new Promise((resolve) => setTimeout(resolve, delayBetweenRunsMs));
     executedAny = true;
     const startedAt = Date.now();
-    let status, actual, retried = false, screenshot = null, reason = null;
+    let status, actual, retried = false, screenshot = null, reason = null, classification = null;
     try {
       const outcome = await runner();
       status = outcome.passed ? "passed" : "failed";
       actual = outcome.actual;
       screenshot = outcome.screenshot ?? null;
       reason = outcome.reason ?? null;
+      if (!outcome.passed) classification = classifyReportedFailure(reason ?? actual);
     } catch (error) {
       screenshot = takeEvidence(error)?.screenshot ?? null;
       if (!LOGIN_IDENTITY_TIMEOUT_PATTERN.test(error.message)) {
         status = "failed";
         actual = `Execution error: ${safeErrorMessage(error)}`;
         reason = actual;
+        classification = classifyThrown(error);
       } else {
         retried = true;
         try {
@@ -248,10 +251,12 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
           actual = `(retried once after the first login timed out) ${outcome.actual}`;
           screenshot = outcome.screenshot ?? null;
           reason = outcome.reason ?? null;
+          if (!outcome.passed) classification = classifyReportedFailure(reason ?? actual);
         } catch (retryError) {
           status = "failed";
           actual = `Execution error (after one retry): ${safeErrorMessage(retryError)}`;
           reason = actual;
+          classification = classifyThrown(retryError);
           screenshot = takeEvidence(retryError)?.screenshot ?? null;
         }
       }
@@ -263,8 +268,8 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
     const definition = testbook.resolveCurrentDefinition(cell.externalId);
     const scenarioResultId = randomUUID();
     db.prepare(
-      `INSERT INTO scenario_results(id,run_id,scenario,title,status,expected,actual,duration_ms,healed,test_case_id,test_definition_version_id)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO scenario_results(id,run_id,scenario,title,status,expected,actual,duration_ms,healed,test_case_id,test_definition_version_id,failure_class,reason_code)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       scenarioResultId,
       runId,
@@ -277,6 +282,8 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
       0,
       definition?.testCaseId ?? null,
       definition?.versionId ?? null,
+      classification?.failureClass ?? null,
+      classification?.reasonCode ?? null,
     );
     // Evidence capture (real gap hit live 2026-09-23: a failed run had no
     // screenshot and no plain-English explanation, just a JSON blob). Its
@@ -301,11 +308,14 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
     db.prepare("UPDATE scenario_results SET evidence_status=? WHERE id=?").run(evidenceStatus, scenarioResultId);
     if (status === "failed" && (reason || evidenceStatus === "save_failed")) {
       const questionId = randomUUID();
-      const text = [reason, evidenceStatus === "save_failed" ? "The failure screenshot could not be saved, so this result has no visual evidence." : null].filter(Boolean).join(" ");
+      const text = [classification ? `${classification.explanation} [${classification.failureClass}: ${classification.reasonCode}]` : null, reason, evidenceStatus === "save_failed" ? "The failure screenshot could not be saved, so this result has no visual evidence." : null].filter(Boolean).join(" ");
       db.prepare("INSERT INTO clarifications(id,run_id,question,created_at) VALUES(?,?,?,?)").run(questionId, runId, text, now());
       audit?.("clarification.opened", questionId, { runId, scenario: cell.externalId });
     }
-    results.push({ ...cell, executed: true, status, actual, retried, scenarioResultId, evidenceStatus });
+    results.push({
+      ...cell, executed: true, status, actual, retried, scenarioResultId, evidenceStatus,
+      failureClass: classification?.failureClass ?? null, reasonCode: classification?.reasonCode ?? null, explanation: classification?.explanation ?? null,
+    });
   }
   return results;
 }

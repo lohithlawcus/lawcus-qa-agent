@@ -1,5 +1,6 @@
 import { now } from "./store.mjs";
 import { safeErrorMessage } from "./redact.mjs";
+import { CLASS_LABELS, classifyThrown, countByClass } from "./failure-class.mjs";
 
 // One place that decides what a finished run's status means, used by the
 // app's impacted-test route and by the MCP run tools. A run is "passed"
@@ -19,21 +20,36 @@ export function summarizeCells(results) {
   const failed = executedCells.filter((r) => r.status !== "passed").length;
   const notRun = planned - executed;
 
+  // Only a functional failure is a claim about Lawcus. A check that could not
+  // run (environment, tooling, page automation, recording) leaves the run
+  // inconclusive. A result with no class predates classification and counts
+  // as functional, so older callers behave as before.
+  const byClass = countByClass(executedCells.filter((r) => r.status !== "passed"));
+  const functionalFailed = byClass.functional || 0;
+  const couldNotComplete = failed - functionalFailed;
+
   let outcome;
-  if (failed > 0) outcome = "failed";
+  if (functionalFailed > 0) outcome = "failed";
+  else if (couldNotComplete > 0) outcome = "inconclusive";
   else if (executed === 0) outcome = "inconclusive";
   else if (notRun > 0) outcome = "partial";
   else outcome = "passed";
 
   const status = outcome === "passed" ? "passed" : outcome === "failed" ? "failed" : "interrupted";
+  const otherBreakdown = Object.entries(byClass)
+    .filter(([failureClass]) => failureClass !== "functional")
+    .map(([failureClass, count]) => `${count} ${CLASS_LABELS[failureClass]}`)
+    .join("; ");
   const summary =
     outcome === "passed"
       ? `${executed} of ${planned} check(s) executed and passed.`
       : outcome === "failed"
-        ? `${failed} of ${executed} executed check(s) failed${notRun ? `; ${notRun} of ${planned} planned check(s) were not run` : ""}.`
-        : outcome === "inconclusive"
-          ? `0 of ${planned} planned check(s) executed — nothing was verified, so no pass is claimed.`
-          : `${passed} of ${executed} executed check(s) passed, but ${notRun} of ${planned} planned check(s) were not run (unapproved, quarantined or missing) — no overall pass is claimed.`;
+        ? `${functionalFailed} of ${executed} executed check(s) failed${notRun ? `; ${notRun} of ${planned} planned check(s) were not run` : ""}${otherBreakdown ? `; ${otherBreakdown}` : ""}.`
+        : couldNotComplete > 0
+          ? `No check showed Lawcus behaving wrongly, but ${couldNotComplete} of ${executed} executed check(s) could not complete (${otherBreakdown})${passed ? `; ${passed} passed` : ""} — nothing is claimed about the affected checks, so no pass is claimed.`
+          : outcome === "inconclusive"
+            ? `0 of ${planned} planned check(s) executed — nothing was verified, so no pass is claimed.`
+            : `${passed} of ${executed} executed check(s) passed, but ${notRun} of ${planned} planned check(s) were not run (unapproved, quarantined or missing) — no overall pass is claimed.`;
   return { planned, executed, passed, failed, notRun, outcome, status, summary };
 }
 
@@ -54,7 +70,7 @@ export function finalizeRun(db, runId, { results = null, planned = null, error =
       failed,
       outcome: "inconclusive",
       status: "interrupted",
-      summary: `The run stopped before finishing (${saved.length} of ${planned ?? "?"} check(s) were recorded): ${safeErrorMessage(error, 300)}. No pass is claimed.`,
+      summary: `The run stopped before finishing (${saved.length} of ${planned ?? "?"} check(s) were recorded): ${safeErrorMessage(error, 300)}. ${(() => { const c = classifyThrown(error); return `Classified as ${c.failureClass} (${c.reasonCode}): ${c.explanation}`; })()} No pass is claimed.`,
     };
   } else {
     verdict = summarizeCells(results ?? []);
