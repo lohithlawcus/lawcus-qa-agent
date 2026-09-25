@@ -120,11 +120,28 @@ export async function runTestCase(definition, initialScope) {
   const scope = { ...initialScope };
   for (const phase of ["setup", "steps", "assertions", "cleanup"]) {
     for (const step of definition[phase]) {
-      const primitive = resolvePrimitive(step.primitive);
-      const input = resolveInput(step.input, scope);
-      const result = await primitive.run(input);
-      if (step.saveAs) scope[step.saveAs] = result;
+      try {
+        const primitive = resolvePrimitive(step.primitive);
+        const input = resolveInput(step.input, scope);
+        const result = await primitive.run(input);
+        if (step.saveAs) scope[step.saveAs] = result;
+      } catch (error) {
+        // Remember WHERE it failed: an assertion step that does not see the
+        // expected state is a different thing from a setup step that could not
+        // drive the page. Kept off the error's own properties (a logger could
+        // serialize those); the primitives themselves are hash-pinned and are
+        // deliberately not changed to carry this.
+        if (error && typeof error === "object") failedSteps.set(error, { phase, primitive: step.primitive });
+        throw error;
+      }
     }
   }
   return scope;
+}
+
+const failedSteps = new WeakMap();
+
+/** { phase, primitive } of the step that threw this error inside runTestCase, or null. */
+export function takeFailedStep(error) {
+  return error && typeof error === "object" ? (failedSteps.get(error) ?? null) : null;
 }

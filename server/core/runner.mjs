@@ -10,7 +10,9 @@ import {
   evaluateLocatorCandidate,
 } from "./contracts.mjs";
 import { openProposals } from "./proposals.mjs";
-import { loadTestCaseDirectory, runTestCase } from "./dsl.mjs";
+import { loadTestCaseDirectory, runTestCase, takeFailedStep } from "./dsl.mjs";
+import { classifyStepFailure, classifyThrown, EVIDENCE_SAVE_FAILED } from "./failure-class.mjs";
+import { finalizeFromSavedResults, finalizeRun, finalizeCancelledRun } from "./run-outcome.mjs";
 import { openTestBook } from "./testbook.mjs";
 import { now } from "./store.mjs";
 const aliases = ["Sign in", "Log in", "Login"];
@@ -64,15 +66,11 @@ export async function executeRun({
   const old = previous ? JSON.parse(previous.fingerprint) : null;
   let label = old?.buttonName || "Sign in";
   let browser;
-  // V5 Step 6 / section 16 — a "failure" is no longer one undifferentiated
-  // bucket. blockedCount: the check itself couldn't be verified (an
-  // environment/evidence problem, not a behavioral result) — a required
-  // blocked check can never produce overall PASS. reviewCount: a genuine
-  // behavioral mismatch, which V1 already always turns into a clarification
-  // question rather than asserting "this is definitely a defect" — so the
-  // honest run-level status for that is needs_review, not a flat failed.
-  let blockedCount = 0;
-  let reviewCount = 0;
+  // Failures are classified per check (functional / infrastructure / automation /
+  // integrity / unclassified) and the run is finalized from what was recorded by
+  // the same code as every other run (run-outcome.mjs): only a FUNCTIONAL failure
+  // fails a run; a check that could not run, or whose evidence could not be
+  // saved, leaves it inconclusive, and never a pass.
   let completedScenarios = 0;
   let cancelled = false;
   let proposed = 0;
@@ -111,6 +109,7 @@ export async function executeRun({
       let page;
       let status = "passed";
       let actual = descriptions[scenario].expected;
+      let classification = null;
       let candidate = label;
       let screenshotName;
       let traceName;
@@ -187,18 +186,22 @@ export async function executeRun({
             });
           }
         }
-      } catch {
-        reviewCount++;
+      } catch (error) {
+        classification = classifyStepFailure(error, takeFailedStep(error));
         status = "failed";
-        actual =
-          "The expected login behavior was not observed, or the page could not be resolved safely. The expected result has been preserved.";
+        const functional = classification.failureClass === "functional";
+        actual = functional
+          ? "The expected login behavior was not observed, or the page could not be resolved safely. The expected result has been preserved."
+          : `The check could not be completed. ${classification.explanation}`;
         const clarificationId = randomUUID();
         db.prepare(
           "INSERT INTO clarifications(id,run_id,question,created_at) VALUES(?,?,?,?)",
         ).run(
           clarificationId,
           runId,
-          `While checking “${descriptions[scenario].title}”, I could not confirm: ${descriptions[scenario].expected} Is this an intentional behavior change or should it be reported as a defect?`,
+          functional
+            ? `While checking “${descriptions[scenario].title}”, I could not confirm: ${descriptions[scenario].expected} Is this an intentional behavior change or should it be reported as a defect?`
+            : `${classification.explanation} [${classification.failureClass}: ${classification.reasonCode}] While checking “${descriptions[scenario].title}” nothing was concluded about the application.`,
           now(),
         );
         audit("clarification.opened", clarificationId, { runId, scenario });
@@ -231,21 +234,32 @@ export async function executeRun({
           await context.close().catch(() => {});
         }
       }
+      const evidenceStatus = screenshotName && traceName ? "saved" : page ? "save_failed" : "none_captured";
       if ((!screenshotName || !traceName) && status === "passed") {
-        // An evidence-save failure is an infrastructure problem, not a
-        // behavioral result — section 16: distinct from a genuine failure,
-        // and a required blocked check can never produce overall PASS.
-        blockedCount++;
-        status = "blocked";
+        // An evidence-save failure is an integrity problem, not a behavioral
+        // result: the check is not counted as passed, and the run is
+        // inconclusive rather than failed.
+        status = "failed";
+        classification = EVIDENCE_SAVE_FAILED;
         actual =
           "The browser assertion completed, but required evidence could not be saved. This check is not counted as passed.";
+        const clarificationId = randomUUID();
+        db.prepare(
+          "INSERT INTO clarifications(id,run_id,question,created_at) VALUES(?,?,?,?)",
+        ).run(
+          clarificationId,
+          runId,
+          `${classification.explanation} [${classification.failureClass}: ${classification.reasonCode}]`,
+          now(),
+        );
+        audit("clarification.opened", clarificationId, { runId, scenario });
       }
       const linked = testbook.resolveCurrentDefinition(testCases[scenario].id);
       db.prepare(
         `INSERT INTO scenario_results(
            id,run_id,scenario,title,status,expected,actual,duration_ms,healed,
-           test_case_id,test_definition_version_id)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+           test_case_id,test_definition_version_id,failure_class,reason_code,evidence_status)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ).run(
         id,
         runId,
@@ -258,6 +272,9 @@ export async function executeRun({
         0, // Step 1: runs never record an automatic repair.
         linked?.testCaseId ?? null,
         linked?.versionId ?? null,
+        classification?.failureClass ?? null,
+        classification?.reasonCode ?? null,
+        evidenceStatus,
       );
       for (const [kind, name] of [
         ["screenshot", screenshotName],
@@ -275,26 +292,18 @@ export async function executeRun({
       completedScenarios++;
     }
     if (cancelled) {
-      const summary = `Run cancelled by the operator after ${completedScenarios} of ${plan.scenarios.length} checks. No result is claimed for the checks that had not started.`;
-      db.prepare(
-        "UPDATE runs SET status='cancelled',finished_at=?,summary=? WHERE id=?",
-      ).run(now(), summary, runId);
+      finalizeCancelledRun(db, runId, { planned: plan.scenarios.length });
       audit("run.cancelled", runId, {
         completed: completedScenarios,
         total: plan.scenarios.length,
       });
       return;
     }
-    // A required blocked check can never produce overall PASS (section 16);
-    // a genuine behavioral failure is needs_review, not a flat failed —
-    // V1 already treats every such failure as a clarification question, not
-    // an assertion that the product is definitely broken.
-    const overallStatus = blockedCount
-      ? "blocked"
-      : reviewCount
-        ? "needs_review"
-        : "passed";
-    if (overallStatus === "passed") {
+    const verdict = finalizeFromSavedResults(db, runId, {
+      planned: plan.scenarios.length,
+      extraSummary: `${proposed ? `${proposed} locator repair proposal awaiting approval. ` : ""}${run.replay ? "Saved execution path reused." : "First execution."} No model calls during execution. Local test application only.`,
+    });
+    if (verdict.outcome === "passed") {
       if (!old || old.buttonName !== label) {
         const pathId = randomUUID();
         const version =
@@ -319,27 +328,19 @@ export async function executeRun({
         audit("path.saved", pathId, { runbookId: book.id, version });
       }
     }
-    const passedCount = plan.scenarios.length - blockedCount - reviewCount;
-    const summary = `${plan.scenarios.length} checks completed. ${passedCount} passed.${reviewCount ? ` ${reviewCount} need review.` : ""}${blockedCount ? ` ${blockedCount} blocked (evidence could not be saved).` : ""}${proposed ? ` ${proposed} locator repair proposal awaiting approval.` : ""} ${run.replay ? "Saved execution path reused." : "First execution."} No model calls during execution. Local test application only.`;
-    db.prepare(
-      "UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?",
-    ).run(overallStatus, now(), summary, runId);
     audit("run.completed", runId, {
-      status: overallStatus,
-      blocked: blockedCount,
-      needsReview: reviewCount,
+      status: verdict.status,
+      outcome: verdict.outcome,
+      passed: verdict.passed,
+      failed: verdict.failed,
       proposed,
       checks: plan.scenarios.length,
     });
-  } catch {
-    db.prepare(
-      "UPDATE runs SET status='interrupted',finished_at=?,summary=? WHERE id=?",
-    ).run(
-      now(),
-      "The browser runner could not complete. No successful result is claimed. Check that Chromium is installed and the local test application is available.",
-      runId,
-    );
-    audit("run.interrupted", runId, { reason: "runner-unavailable" });
+  } catch (error) {
+    // Whatever stopped the run is recorded, classified and counted from what was
+    // saved, never swallowed into one generic sentence.
+    finalizeRun(db, runId, { planned: plan.scenarios.length, error });
+    audit("run.interrupted", runId, { reasonCode: classifyThrown(error).reasonCode });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }

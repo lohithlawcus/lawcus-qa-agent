@@ -97,3 +97,16 @@ export function finalizeFromSavedResults(db, runId, { planned, extraSummary = ""
   while (results.length < planned) results.push({ executed: false });
   return finalizeRun(db, runId, { results, extraSummary });
 }
+
+/** Finalizes a run the operator cancelled: the counts come from what was really
+ * recorded, and no result is claimed for checks that never started. 'cancelled'
+ * is an outcome of its own, not a pass, a failure or an inconclusive run. */
+export function finalizeCancelledRun(db, runId, { planned }) {
+  const rows = db.prepare("SELECT status FROM scenario_results WHERE run_id=?").all(runId);
+  const passed = rows.filter((row) => row.status === "passed").length;
+  const summary = `Run cancelled by the operator after ${rows.length} of ${planned} checks. No result is claimed for the checks that had not started.`;
+  db.prepare(
+    "UPDATE runs SET status='cancelled',outcome='cancelled',checks_planned=?,checks_executed=?,checks_passed=?,checks_failed=?,finished_at=?,summary=? WHERE id=?",
+  ).run(planned, rows.length, passed, rows.length - passed, now(), summary, runId);
+  return { planned, executed: rows.length, passed, failed: rows.length - passed, outcome: "cancelled", status: "cancelled", summary };
+}

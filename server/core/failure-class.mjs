@@ -50,6 +50,10 @@ const RULES = [
   { pattern: /page\.goto: Timeout \d+ms exceeded/, failureClass: "infrastructure", reasonCode: "page_load_timeout",
     explanation: "The staging page did not finish loading in time. This is an availability or network problem, not a result about the feature under test." },
 
+  { pattern: /is not approved for execution|is deprecated and cannot execute|implementation changed since approval|No such approved primitive|No such primitive/, failureClass: "integrity", reasonCode: "primitive_not_trusted",
+    explanation: "A step of this check was refused by the primitive approval gate (unknown, unapproved, deprecated or changed since it was approved), so the check did not run. This says nothing about the application." },
+  { pattern: /could not be identified uniquely|sign-in action is ambiguous/, failureClass: "automation", reasonCode: "locator_unresolved",
+    explanation: "The check could not single out the control it needs on the page (none, or more than one, matched). The page may have changed, or the check needs repair; this alone does not show the application is wrong." },
   { pattern: /net::ERR_BLOCKED_BY_CLIENT/, failureClass: "automation", reasonCode: "request_blocked_by_policy",
     explanation: "One of the page's own requests was blocked by this tool's safety policy. The policy may need a reviewed exception, or the page changed." },
   { pattern: /net::ERR_(?:INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|CONNECTION_\w+|TIMED_OUT|NETWORK_CHANGED|PROXY_\w+|TUNNEL_\w+|EMPTY_RESPONSE)|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket hang up/i, failureClass: "infrastructure", reasonCode: "network_unreachable",
@@ -90,6 +94,25 @@ export const EVIDENCE_SAVE_FAILED = {
   reasonCode: "evidence_save_failed",
   explanation: "The check's required encrypted evidence could not be saved, so it cannot be counted as passed. This says nothing about Lawcus.",
 };
+
+/**
+ * A failure inside a DSL check, judged by WHICH step failed. If the environment
+ * or our own records are at fault (no browser, network down, a primitive the gate
+ * refused) that wins. Otherwise a failed ASSERTION step means the check ran and
+ * the expected state was not observed: functional. A failed setup or action step
+ * means the check could not drive the page, so nothing is concluded about it.
+ * For a synthetic application we control, this is what lets a real defect (the
+ * app accepting bad credentials) fail a run instead of reading as "the page
+ * could not be driven".
+ */
+export function classifyStepFailure(error, step) {
+  const base = classifyThrown(error);
+  if (base.failureClass === "infrastructure" || base.failureClass === "integrity") return base;
+  if (step?.phase === "assertions") {
+    return { failureClass: "functional", reasonCode: "assertion_failed", explanation: "The check ran and the expected behavior was not observed." };
+  }
+  return base;
+}
 
 /** Classifies a failed scenario of the browser-driven Login suite. The order
  * matters: a rejected saved account and a skipped check are decided from what
