@@ -1,4 +1,5 @@
 import { attachNetworkObserver, correlateObservation } from "./network-observer.mjs";
+import { attachEvidence } from "./evidence.mjs";
 import { STAGING, API_ORIGIN } from "./environment-adapter.mjs";
 
 // V5 Step 15 — Leads, browser-driven (same "option 2" direction as
@@ -121,9 +122,9 @@ export async function createLeadViaBrowser({ context, apiContracts, firstName, l
     return { uuid: match[1], correlation, events: observer.events, screenshot: await page.screenshot({ fullPage: false }).catch(() => null) };
   } catch (error) {
     // Same pattern as contacts-browser.mjs's createContactViaBrowser:
-    // attach evidence to the thrown error rather than changing this
+    // attach evidence to the thrown error (via the private WeakMap channel in evidence.mjs, never an own property that a logger could serialize) rather than changing this
     // function's throw-on-failure contract for every existing caller.
-    error.screenshot = await page.screenshot({ fullPage: false }).catch(() => null);
+    attachEvidence(error, { screenshot: await page.screenshot({ fullPage: false }).catch(() => null) });
     throw error;
   } finally {
     observer.dispose();

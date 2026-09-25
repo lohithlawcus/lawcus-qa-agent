@@ -96,7 +96,7 @@ export function permitLeadsRequest(url,method,resourceType){
  // exact same path — the real API distinguishes them only by method.
  return (method==='PUT'||method==='POST')&&u.pathname==='/leads';
 }
-async function launch(proxy,headless=true){return chromium.launch({headless,chromiumSandbox:true,...(proxy?{proxy:{server:proxy.server,bypass:'<-loopback>'}}:{}),args:['--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-quic']});}
+async function launch(proxy,headless=true){if(process.env.QA_FORBID_LIVE)throw new Error('Live access (browser launch) is forbidden in this process.');return chromium.launch({headless,chromiumSandbox:true,...(proxy?{proxy:{server:proxy.server,bypass:'<-loopback>'}}:{}),args:['--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-quic']});}
 export async function checkBrowser(){let browser;try{browser=await launch();const p=await browser.newPage();await p.goto('about:blank');return {ready:true,message:'Chromium can launch in the local runner.'};}catch{return {ready:false,message:'Chromium could not launch. Open the app using its launcher and keep that window open.'};}finally{await browser?.close().catch(()=>{});}}
 function locator(page,kind,value){if(kind==='label')return page.getByLabel(value,{exact:true});if(kind==='placeholder')return page.getByPlaceholder(value,{exact:true});if(kind==='button')return page.getByRole('button',{name:value,exact:true});if(kind==='email-type')return page.locator('input[type="email"]');if(kind==='password-type')return page.locator('input[type="password"]');throw new Error('Unknown semantic locator.');}
 async function field(page,type,saved){

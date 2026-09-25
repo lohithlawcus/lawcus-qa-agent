@@ -49,6 +49,9 @@ import { openResourceOwnership } from "./core/resource-ownership.mjs";
 import { openResourceLocks } from "./core/resource-locks.mjs";
 import { openMutationJournal } from "./core/mutation-journal.mjs";
 import { createCleanupRunner } from "./core/cleanup.mjs";
+import { finalizeRun } from "./core/run-outcome.mjs";
+import { checkStagingBudget } from "./core/run-admission.mjs";
+import { currentCodeRevision } from "./core/code-revision.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -656,8 +659,8 @@ const server = createServer(
         if(REAL_LOGIN_ENVIRONMENTS.has(book.environment_id)){
           if(!browserStatus.ready){json(res,409,{error:'Check the browser connection in Environment first.'});return;}
           const login=await keychain('exists',ENVIRONMENT_ACCOUNTS[book.environment_id]);if(!login.exists){json(res,409,{error:'Save your staging account in Environment first.'});return;}
-          const recent=db.prepare("SELECT COUNT(*) n FROM runs JOIN runbooks ON runbooks.id=runs.runbook_id WHERE runbooks.environment_id=? AND runs.started_at>?").get(book.environment_id,new Date(Date.now()-600000).toISOString());
-          if(recent.n>=3){json(res,429,{error:'Three staging runs were started in ten minutes. Please wait before more login attempts.'});return;}
+          const budget=checkStagingBudget(db,book.environment_id);
+          if(!budget.ok){json(res,429,{error:'Three staging runs were started in ten minutes. Please wait before more login attempts.'});return;}
         }else{validateExecution(db.prepare('SELECT * FROM environments WHERE id=?').get(book.environment_id));}
         if (connecting() || savingCredentials || checkingBrowser || db.prepare("SELECT 1 FROM runs WHERE status='running'").get()) {
           json(res, 409, {
@@ -704,7 +707,7 @@ const server = createServer(
           )
           .get(book.id);
         db.prepare(
-          "INSERT INTO runs(id,runbook_id,status,replay,path_id,started_at,request_key) VALUES(?,?,?,?,?,?,?)",
+          "INSERT INTO runs(id,runbook_id,status,replay,path_id,started_at,request_key,code_revision) VALUES(?,?,?,?,?,?,?,?)",
         ).run(
           id,
           book.id,
@@ -713,6 +716,7 @@ const server = createServer(
           previous?.id || null,
           now(),
           input.idempotencyKey,
+          currentCodeRevision(),
         );
         if (manifest)
           db.prepare(
@@ -963,6 +967,10 @@ const server = createServer(
         }
         const plan = planImpactedTest({ intent: input.intent, knowledge, testbook });
         if (!plan.matched) { json(res, 200, { plan, results: [], filedProposals: [] }); return; }
+        // Same staging run budget as /runs and MCP — every cell is a real login
+        // from the one shared QA account.
+        const impactedBudget = checkStagingBudget(db, "lawcus");
+        if (!impactedBudget.ok) { json(res, 429, { error: "Three staging runs were started in ten minutes. Please wait before more login attempts." }); return; }
 
         const runbookId = randomUUID();
         db.prepare("INSERT INTO runbooks VALUES(?,?,?,?,?,?,?,?)").run(
@@ -970,7 +978,7 @@ const server = createServer(
           JSON.stringify({ scenarios: plan.cells.map((c) => c.externalId) }), now(),
         );
         const runId = randomUUID();
-        db.prepare("INSERT INTO runs(id,runbook_id,status,replay,started_at) VALUES(?,?,?,?,?)").run(runId, runbookId, "running", 0, now());
+        db.prepare("INSERT INTO runs(id,runbook_id,status,replay,started_at,code_revision) VALUES(?,?,?,?,?,?)").run(runId, runbookId, "running", 0, now(), currentCodeRevision());
         audit("impacted_test.started", runId, { intent: input.intent, cells: plan.cells.length, gaps: plan.gaps.length });
 
         const runners = buildNativeRunners({ apiContracts, mutationJournal, runId });
@@ -980,14 +988,11 @@ const server = createServer(
         try {
           results = await executeImpactedTest({ plan, runners, db, runId, testbook, artifactDirectory, audit });
           filedProposals = proposeGapCoverage({ proposals, plan });
-          const anyFailed = results.some((r) => r.executed && r.status === "failed");
-          db.prepare("UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?").run(
-            anyFailed ? "failed" : "passed", now(),
-            `${results.filter((r) => r.executed).length} covered cell(s) executed, ${plan.gaps.length} gap(s) proposed for review.`,
-            runId,
-          );
+          // Verdict from what actually executed — zero executed checks, or
+          // only some of the planned ones, is never a green run.
+          finalizeRun(db, runId, { results, extraSummary: `${plan.gaps.length} gap(s) proposed for review.` });
         } catch (error) {
-          db.prepare("UPDATE runs SET status='failed',finished_at=?,summary=? WHERE id=?").run(now(), `Execution error: ${error.message}`, runId);
+          finalizeRun(db, runId, { planned: plan.cells.length, error });
           throw error;
         }
         audit("impacted_test.completed", runId, { results: results.length, filedProposals: filedProposals.length });

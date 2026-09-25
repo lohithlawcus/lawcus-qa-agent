@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sealEvidence } from "./setup.mjs";
+import { takeEvidence } from "./evidence.mjs";
 import { now } from "./store.mjs";
 
 // V5 Step 16 — Natural-Language Impacted Testing (master spec Step 16;
@@ -107,8 +108,17 @@ export function planImpactedTest({ intent, knowledge, testbook }) {
   const cells = pattern.cells.map((cell) => {
     const feature = tree.find((f) => f.name === cell.featureName);
     const testCase = feature?.suites.flatMap((s) => s.cases).find((c) => c.externalId === cell.externalId);
-    const covered = Boolean(testCase && testCase.status === "approved");
-    return { ...cell, covered, testCaseId: testCase?.id ?? null, currentVersion: testCase?.currentVersion ?? null };
+    // Covered means approved AND its automation isn't quarantined — an
+    // approved-but-known-broken case must never count as coverage.
+    const covered = Boolean(testCase?.runnable);
+    const blockedReason = covered
+      ? null
+      : !testCase
+        ? "no_case"
+        : testCase.status !== "approved"
+          ? "not_approved"
+          : "quarantined";
+    return { ...cell, covered, blockedReason, testCaseId: testCase?.id ?? null, currentVersion: testCase?.currentVersion ?? null };
   });
 
   return {
@@ -119,7 +129,10 @@ export function planImpactedTest({ intent, knowledge, testbook }) {
     features,
     knowledgeItems,
     cells,
-    gaps: cells.filter((c) => !c.covered),
+    // A quarantined case exists and is approved — it is not a coverage
+    // gap to propose new tests for, it is a known-broken check to repair.
+    gaps: cells.filter((c) => !c.covered && c.blockedReason !== "quarantined"),
+    quarantined: cells.filter((c) => c.blockedReason === "quarantined"),
   };
 }
 
@@ -180,7 +193,7 @@ export function proposeGapCoverage({ proposals, plan, generatedBy = "impacted_te
  */
 const LOGIN_IDENTITY_TIMEOUT_PATTERN = /getByPlaceholder\('Search your practice'/;
 
-export async function executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs = 8000, artifactDirectory = null, audit = null }) {
+export async function executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs = 8000, artifactDirectory = null, audit = null, sealer = sealEvidence }) {
   const results = [];
   let executedAny = false;
   for (const cell of plan.cells) {
@@ -201,7 +214,7 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
       screenshot = outcome.screenshot ?? null;
       reason = outcome.reason ?? null;
     } catch (error) {
-      screenshot = error.screenshot ?? null;
+      screenshot = takeEvidence(error)?.screenshot ?? null;
       if (!LOGIN_IDENTITY_TIMEOUT_PATTERN.test(error.message)) {
         status = "failed";
         actual = `Execution error: ${error.message}`;
@@ -218,7 +231,7 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
           status = "failed";
           actual = `Execution error (after one retry): ${retryError.message}`;
           reason = actual;
-          screenshot = retryError.screenshot ?? null;
+          screenshot = takeEvidence(retryError)?.screenshot ?? null;
         }
       }
     }
@@ -241,27 +254,33 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
       definition?.versionId ?? null,
     );
     // Evidence capture (real gap hit live 2026-09-23: a failed run had no
-    // screenshot and no plain-English explanation, just a JSON blob).
-    // Best-effort and additive only — a screenshot that fails to save
-    // never changes status, matching this table's `scenario_result_id`
-    // column being nullable-by-design rather than a hard requirement.
+    // screenshot and no plain-English explanation, just a JSON blob). Its
+    // outcome is recorded explicitly — 'saved', 'none_captured' or
+    // 'save_failed' — instead of being swallowed: a screenshot that could
+    // not be saved never changes the check's pass/fail, but it must never
+    // look like a fully evidenced result either.
+    let evidenceStatus = screenshot ? "saved" : "none_captured";
     if (screenshot && artifactDirectory) {
       try {
         mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
         const filename = `${randomUUID()}.png.enc`;
-        writeFileSync(join(artifactDirectory, filename), await sealEvidence(screenshot), { mode: 0o600 });
+        writeFileSync(join(artifactDirectory, filename), await sealer(screenshot), { mode: 0o600 });
         db.prepare("INSERT INTO artifacts VALUES(?,?,?,?,?,?)").run(randomUUID(), runId, scenarioResultId, "screenshot", filename, now());
       } catch {
-        // Evidence saving is a diagnostic extra, never the check's own
-        // pass/fail signal — see the comment above.
+        evidenceStatus = "save_failed";
+        audit?.("evidence.save_failed", scenarioResultId, { runId, scenario: cell.externalId });
       }
+    } else if (screenshot && !artifactDirectory) {
+      evidenceStatus = "not_persisted";
     }
-    if (status === "failed" && reason) {
+    db.prepare("UPDATE scenario_results SET evidence_status=? WHERE id=?").run(evidenceStatus, scenarioResultId);
+    if (status === "failed" && (reason || evidenceStatus === "save_failed")) {
       const questionId = randomUUID();
-      db.prepare("INSERT INTO clarifications(id,run_id,question,created_at) VALUES(?,?,?,?)").run(questionId, runId, reason, now());
+      const text = [reason, evidenceStatus === "save_failed" ? "The failure screenshot could not be saved, so this result has no visual evidence." : null].filter(Boolean).join(" ");
+      db.prepare("INSERT INTO clarifications(id,run_id,question,created_at) VALUES(?,?,?,?)").run(questionId, runId, text, now());
       audit?.("clarification.opened", questionId, { runId, scenario: cell.externalId });
     }
-    results.push({ ...cell, executed: true, status, actual, retried, scenarioResultId });
+    results.push({ ...cell, executed: true, status, actual, retried, scenarioResultId, evidenceStatus });
   }
   return results;
 }

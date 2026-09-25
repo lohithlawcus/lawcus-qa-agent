@@ -112,6 +112,8 @@ type TestCase = {
   priority: string;
   risk: string;
   status: string;
+  automationReadiness?: string;
+  quarantineReason?: string | null;
   tags: string[];
   currentVersion: number;
   stats: CaseStats;
@@ -317,6 +319,7 @@ type ImpactedCell = {
   recordState: string;
   externalId: string;
   covered: boolean;
+  blockedReason?: string | null;
   testCaseId: string | null;
   currentVersion: number | null;
   executed?: boolean;
@@ -1198,8 +1201,10 @@ export default function Home() {
                               {executed
                                 ? executed.status
                                 : cell.covered
-                                  ? "proven"
-                                  : "needs review"}
+                                  ? "approved · not run yet"
+                                  : cell.blockedReason === "quarantined"
+                                    ? "quarantined"
+                                    : "needs review"}
                             </Badge>
                           </div>
                         );
@@ -1407,6 +1412,15 @@ export default function Home() {
                                     <Badge variant="outline">{testCase.risk} risk</Badge>
                                     <Badge variant="outline">v{testCase.currentVersion}</Badge>
                                     <Badge variant="outline">{testCase.status}</Badge>
+                                    {testCase.automationReadiness === "quarantined" && (
+                                      <Badge
+                                        className="status failed"
+                                        variant="outline"
+                                        title={testCase.quarantineReason ?? undefined}
+                                      >
+                                        quarantined — not counted as coverage
+                                      </Badge>
+                                    )}
                                   </div>
                                   <span className="subtle">
                                     {testCase.stats.executions} execution

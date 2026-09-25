@@ -3,6 +3,9 @@ import { now } from "../core/store.mjs";
 import { ApiContractError } from "../core/api-contracts.mjs";
 import { traverseImpactGraph, executeImpactedTest, proposeGapCoverage, planImpactedTest } from "../core/impacted-testing.mjs";
 import { buildNativeRunners, NATIVE_SUITE_MEMBERS } from "../testbook/lawcus-native-cases.mjs";
+import { finalizeRun } from "../core/run-outcome.mjs";
+import { checkStagingBudget } from "../core/run-admission.mjs";
+import { currentCodeRevision } from "../core/code-revision.mjs";
 
 // V5 Step 18 / master spec section 41 — Safe Lawcus QA MCP. Every function
 // here is a thin, pure(ish) wrapper around a Core capability that already
@@ -28,6 +31,7 @@ export const MCP_ERROR = {
   NOT_APPROVED: "not_approved",
   NOT_RUNNABLE: "not_runnable",
   ALREADY_RUNNING: "already_running",
+  RATE_LIMITED: "rate_limited",
   INVALID_INPUT: "invalid_input",
 };
 
@@ -128,6 +132,15 @@ export function listPendingProposals({ proposals }) {
   return proposals.inbox("pending_review");
 }
 
+// Same staging run budget the app enforces (server/core/run-admission.mjs),
+// so a run started through MCP can't bypass the limit protecting the one
+// shared QA account.
+function ensureWithinRunBudget(db) {
+  const budget = checkStagingBudget(db, "lawcus");
+  if (!budget.ok)
+    throw new McpToolError(MCP_ERROR.RATE_LIMITED, `${budget.recent} staging runs were started in the last ${budget.windowMinutes} minutes (limit ${budget.limit}). Wait before starting another.`);
+}
+
 function ensureNoActiveRun(db) {
   if (db.prepare("SELECT 1 FROM runs WHERE status='running'").get())
     throw new McpToolError(MCP_ERROR.ALREADY_RUNNING, "A test is already running. Wait for it to finish before starting another.");
@@ -144,18 +157,10 @@ function createMcpRun(db, { title, intent, externalIds }) {
     JSON.stringify({ scenarios: externalIds }), now(),
   );
   const runId = randomUUID();
-  db.prepare("INSERT INTO runs(id,runbook_id,status,replay,started_at) VALUES(?,?,?,?,?)").run(runId, runbookId, "running", 0, now());
+  db.prepare("INSERT INTO runs(id,runbook_id,status,replay,started_at,code_revision) VALUES(?,?,?,?,?,?)").run(runId, runbookId, "running", 0, now(), currentCodeRevision());
   return runId;
 }
 
-function finishMcpRun(db, runId, results) {
-  const anyFailed = results.some((r) => r.executed && r.status === "failed");
-  db.prepare("UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?").run(
-    anyFailed ? "failed" : "passed", now(),
-    `${results.filter((r) => r.executed).length} case(s) executed via MCP.`,
-    runId,
-  );
-}
 
 /** section 41's run_approved_test — exactly one already-registered native
  * TestBook case, real browser automation against real staging (not a
@@ -167,10 +172,13 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
   if (!testCase) throw new McpToolError(MCP_ERROR.NOT_FOUND, `No TestBook case with external_id "${externalId}".`);
   if (testCase.status !== "approved")
     throw new McpToolError(MCP_ERROR.NOT_APPROVED, `Case "${externalId}" is not approved (status: ${testCase.status}).`);
+  if (testCase.automationReadiness === "quarantined")
+    throw new McpToolError(MCP_ERROR.NOT_RUNNABLE, `Case "${externalId}" is quarantined (its automation is known to be broken): ${testCase.quarantineReason}`);
   const runners = buildNativeRunners({ apiContracts, mutationJournal, runId: null });
   if (!runners[externalId])
     throw new McpToolError(MCP_ERROR.NOT_RUNNABLE, `"${externalId}" is not individually runnable via MCP yet (only Step 15's native Contact/Lead cases are) — try run_approved_suite for a DSL-defined suite like login-essentials instead.`);
   ensureNoActiveRun(db);
+  ensureWithinRunBudget(db);
   const runId = createMcpRun(db, { title: `MCP: ${externalId}`, intent: `run_approved_test(${externalId})`, externalIds: [externalId] });
   // Re-bind now that the real runId exists, since mutation-journal entries
   // must reference it.
@@ -179,10 +187,13 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
   let results;
   try {
     results = await executeImpactedTest({ plan, runners: boundRunners, db, runId, testbook, delayBetweenRunsMs: 0, artifactDirectory, audit });
-  } finally {
-    finishMcpRun(db, runId, results ?? []);
+  } catch (error) {
+    // Never leave a default "passed" behind an exception.
+    finalizeRun(db, runId, { planned: plan.cells.length, error });
+    throw error;
   }
-  return { runId, results };
+  const verdict = finalizeRun(db, runId, { results });
+  return { runId, outcome: verdict.outcome, results };
 }
 
 /** section 41's run_approved_suite — every native case in a known suite
@@ -193,19 +204,28 @@ export async function runApprovedSuite({ db, testbook, apiContracts, mutationJou
   if (!members)
     throw new McpToolError(MCP_ERROR.NOT_RUNNABLE, `"${suiteName}" is not a suite this MCP server can run yet. Known suites: ${Object.keys(NATIVE_SUITE_MEMBERS).join(", ")}.`);
   ensureNoActiveRun(db);
+  ensureWithinRunBudget(db);
   const runId = createMcpRun(db, { title: `MCP suite: ${suiteName}`, intent: `run_approved_suite(${suiteName})`, externalIds: members });
   const runners = buildNativeRunners({ apiContracts, mutationJournal, runId });
   const plan = { cells: members.map((externalId) => {
     const testCase = testbook.findCase(externalId);
-    return { featureName: testCase?.featureName ?? suiteName, recordState: "n/a", externalId, covered: testCase?.status === "approved" };
+    // Runnable = approved AND not quarantined. An unapproved, missing or
+    // quarantined member is reported as not run, never silently counted.
+    return {
+      featureName: testCase?.featureName ?? suiteName, recordState: "n/a", externalId,
+      covered: Boolean(testCase?.runnable),
+      blockedReason: testCase?.runnable ? null : !testCase ? "no_case" : testCase.status !== "approved" ? "not_approved" : "quarantined",
+    };
   }) };
   let results;
   try {
     results = await executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs: 8000, artifactDirectory, audit });
-  } finally {
-    finishMcpRun(db, runId, results ?? []);
+  } catch (error) {
+    finalizeRun(db, runId, { planned: plan.cells.length, error });
+    throw error;
   }
-  return { runId, results };
+  const verdict = finalizeRun(db, runId, { results });
+  return { runId, outcome: verdict.outcome, results };
 }
 
 export function getRunStatus({ db }, { runId }) {

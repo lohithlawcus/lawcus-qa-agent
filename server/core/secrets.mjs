@@ -12,6 +12,10 @@ import {resolve} from 'node:path';
 // never disturbed by this), the three new environments get their own.
 const accounts=new Set(['lawcus-login','lawcus-login-co-server','lawcus-login-prod-usa','lawcus-login-prod-eu','openai-api','artifact-key','lawcus-persona-admin','lawcus-persona-member','lawcus-persona-co-counsel','lawcus-persona-custom']);
 export async function keychain(operation,account,value){
+ // Test-safety tripwire: a process that sets QA_FORBID_LIVE (the truthful-
+ // accounting tests do) can never reach the real Keychain, so a broken
+ // safeguard fails fast instead of falling through to live staging code.
+ if(process.env.QA_FORBID_LIVE)throw new Error('Live access (Keychain) is forbidden in this process.');
  if(!accounts.has(account))throw new Error('Unknown credential reference.');
  return await new Promise((resolveResult,reject)=>{
   const child=spawn(resolve('work/bin/qa-keychain'),[],{stdio:['pipe','pipe','ignore']});let output='';let settled=false;
