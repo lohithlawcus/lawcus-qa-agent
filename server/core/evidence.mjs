@@ -18,3 +18,16 @@ export function takeEvidence(error) {
   evidenceByError.delete(error);
   return evidence;
 }
+
+/** A failure/diagnostic screenshot with every password input masked, so a
+ * page that happens to show a typed password can never put it in evidence.
+ * Deliberately narrower than the login suite's screenshots (which mask all
+ * inputs): native checks photograph a QA-owned fixture record and the point
+ * is to make its field values visible. Returns null if it cannot capture. */
+export async function captureScreenshot(page) {
+  try {
+    return await page.screenshot({ fullPage: false, mask: [page.locator('input[type="password"]')] });
+  } catch {
+    return null;
+  }
+}

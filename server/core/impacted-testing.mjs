@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sealEvidence } from "./setup.mjs";
 import { takeEvidence } from "./evidence.mjs";
+import { redactText, safeErrorMessage } from "./redact.mjs";
 import { now } from "./store.mjs";
 
 // V5 Step 16 — Natural-Language Impacted Testing (master spec Step 16;
@@ -217,7 +218,7 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
       screenshot = takeEvidence(error)?.screenshot ?? null;
       if (!LOGIN_IDENTITY_TIMEOUT_PATTERN.test(error.message)) {
         status = "failed";
-        actual = `Execution error: ${error.message}`;
+        actual = `Execution error: ${safeErrorMessage(error)}`;
         reason = actual;
       } else {
         retried = true;
@@ -229,12 +230,16 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
           reason = outcome.reason ?? null;
         } catch (retryError) {
           status = "failed";
-          actual = `Execution error (after one retry): ${retryError.message}`;
+          actual = `Execution error (after one retry): ${safeErrorMessage(retryError)}`;
           reason = actual;
           screenshot = takeEvidence(retryError)?.screenshot ?? null;
         }
       }
     }
+    // Whatever a check reported (its own text or an error's) is masked once
+    // more at the point it is stored and returned.
+    actual = redactText(actual);
+    reason = redactText(reason);
     const definition = testbook.resolveCurrentDefinition(cell.externalId);
     const scenarioResultId = randomUUID();
     db.prepare(

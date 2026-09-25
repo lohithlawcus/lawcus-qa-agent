@@ -1,4 +1,5 @@
 import { now } from "./store.mjs";
+import { safeErrorMessage } from "./redact.mjs";
 
 // One place that decides what a finished run's status means, used by the
 // app's impacted-test route and by the MCP run tools. A run is "passed"
@@ -53,7 +54,7 @@ export function finalizeRun(db, runId, { results = null, planned = null, error =
       failed,
       outcome: "inconclusive",
       status: "interrupted",
-      summary: `The run stopped before finishing (${saved.length} of ${planned ?? "?"} check(s) were recorded): ${String(error.message ?? error).slice(0, 300)}. No pass is claimed.`,
+      summary: `The run stopped before finishing (${saved.length} of ${planned ?? "?"} check(s) were recorded): ${safeErrorMessage(error, 300)}. No pass is claimed.`,
     };
   } else {
     verdict = summarizeCells(results ?? []);
