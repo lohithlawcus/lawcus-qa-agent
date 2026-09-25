@@ -42,7 +42,7 @@ function seed({ knowledge, testbook }) {
   for (const id of ["contacts.create", "contacts.edit", "leads.create", "billing.pay"]) testbook.setAutomationReadiness(id, "ready");
   testbook.setAutomationReadiness("contacts.broken", "quarantined", "known broken selector");
   const item = (semanticId, featureName, title, statement, relatedTests = []) => {
-    const proposed = knowledge.proposeItem({ semanticId, type: "BUSINESS_RULE", featureName, featureDescription: "d", title, statement, provenance: "DOCUMENTED", relatedTests });
+    const proposed = knowledge.proposeItem({ semanticId, type: "BUSINESS_RULE", featureName, featureDescription: "d", title, statement, provenance: "DOCUMENTED", source: { title: "Test source" }, relatedTests });
     return knowledge.approveItem(proposed.id, HUMAN);
   };
   const emailRule = item("BR-CONTACT-EMAIL-001", "Contacts", "Contact email format", "A contact email must be a valid address and unique per firm.", ["contacts.create"]);
@@ -125,7 +125,7 @@ test("naming a feature (not a fact) pulls in that feature's facts and cases; loo
 test("an aliased fact ID in a signal resolves to the fact it aliases", () => {
   withApp((app) => {
     seed(app);
-    app.knowledge.proposeItem({ semanticId: "BR-CONTACT-EMAIL-RENAMED-001", type: "BUSINESS_RULE", featureName: "Contacts", featureDescription: "d", title: "t", statement: "A contact email must be a valid address and unique per firm.", provenance: "DOCUMENTED" });
+    app.knowledge.proposeItem({ semanticId: "BR-CONTACT-EMAIL-RENAMED-001", type: "BUSINESS_RULE", featureName: "Contacts", featureDescription: "d", title: "t", statement: "A contact email must be a valid address and unique per firm.", provenance: "DOCUMENTED", source: { title: "Test source" } });
     const analysis = app.signals.analyze(submit(app.signals, { title: "x", body: "See BR-CONTACT-EMAIL-RENAMED-001 for details." }).id).analysis;
     assert.equal(analysis.affectedFacts[0].semanticId, "BR-CONTACT-EMAIL-001");
   });
@@ -209,7 +209,7 @@ test("flagging needs a human and an approved fact; it does not change the fact; 
     assert.equal(app.knowledge.openReviewFlags([emailRule.id]).length, 1);
     // planImpactedTest surfaces flags for the facts it uses, without changing its cells.
     const intent = "Update a contact custom field and check how it appears for existing/new Contact and Lead.";
-    const customFieldRule = app.knowledge.proposeItem({ semanticId: "BR-CF-TYPE-001", type: "BUSINESS_RULE", featureName: "Contact Custom Fields", featureDescription: "d", title: "Field types", statement: "A custom field has a type.", provenance: "DOCUMENTED" });
+    const customFieldRule = app.knowledge.proposeItem({ semanticId: "BR-CF-TYPE-001", type: "BUSINESS_RULE", featureName: "Contact Custom Fields", featureDescription: "d", title: "Field types", statement: "A custom field has a type.", provenance: "DOCUMENTED", source: { title: "Test source" } });
     app.knowledge.approveItem(customFieldRule.id, HUMAN);
     const cellsBefore = JSON.stringify(planImpactedTest({ intent, knowledge: app.knowledge, testbook: app.testbook }).cells);
     assert.deepEqual(planImpactedTest({ intent, knowledge: app.knowledge, testbook: app.testbook }).reviewFlags, []);
@@ -238,7 +238,7 @@ test("resolving a flag needs a human and a valid resolution, works once, and clo
 test("a pending or rejected fact cannot be flagged", () => {
   withApp((app) => {
     seed(app);
-    const pending = app.knowledge.proposeItem({ semanticId: "BR-PENDING-THING-001", type: "BUSINESS_RULE", featureName: "Contacts", featureDescription: "d", title: "t", statement: "Something pending.", provenance: "DOCUMENTED" });
+    const pending = app.knowledge.proposeItem({ semanticId: "BR-PENDING-THING-001", type: "BUSINESS_RULE", featureName: "Contacts", featureDescription: "d", title: "t", statement: "Something pending.", provenance: "DOCUMENTED", source: { title: "Test source" } });
     assert.throws(() => app.signals.flagForReview({ signalId: submit(app.signals).id, itemId: pending.id, actor: HUMAN }), (e) => e.code === "not_approved");
   });
 });
@@ -264,7 +264,7 @@ test("dismissing needs a human; a dismissed signal cannot be analysed; listing r
 test("staleFacts lists volatile approved facts not reviewed for a while, and facts past their end date; stable recent facts are not listed", () => {
   withApp((app) => {
     const { emailRule } = seed(app);
-    const observed = app.knowledge.proposeItem({ semanticId: "ENV-TENANT-CONFIG-001", type: "ENVIRONMENT_RULE", featureName: "Contacts", featureDescription: "d", title: "Tenant config", statement: "The staging tenant has custom fields enabled.", provenance: "OBSERVED" });
+    const observed = app.knowledge.proposeItem({ semanticId: "ENV-TENANT-CONFIG-001", type: "ENVIRONMENT_RULE", featureName: "Contacts", featureDescription: "d", title: "Tenant config", statement: "The staging tenant has custom fields enabled.", provenance: "OBSERVED", source: { title: "Test source" } });
     app.knowledge.approveItem(observed.id, HUMAN);
     const future = Date.now() + 200 * 86400000;
     const stale = app.signals.staleFacts({ olderThanDays: 90, nowMs: future });
