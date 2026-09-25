@@ -103,6 +103,7 @@ test("a signal that cites a fact yields that fact, its linked test first, and a 
     assert.ok(run.every((entry) => entry.reasons.length && entry.reasons.every((r) => r.because)), "every entry says why it is there");
     assert.ok(run.some((entry) => entry.externalId === "contacts.edit"), "same-feature case included");
     assert.ok(run.some((entry) => entry.externalId === "leads.create" && entry.reasons.some((r) => r.basis === "graph_neighbor")), "an approved dependency pulls the neighbor in");
+    assert.match(run.find((entry) => entry.externalId === "leads.create").reasons.find((r) => r.basis === "graph_neighbor").because, /A change to "Contacts" reaches "Leads": Leads DEPENDS_ON Contacts/);
     assert.ok(!run.some((entry) => entry.externalId === "billing.pay"), "an unrelated feature is not dragged in");
     assert.equal(regressionPlan.blocked.length, 1);
     assert.equal(regressionPlan.blocked[0].externalId, "contacts.broken");
@@ -311,5 +312,15 @@ test("citing an older dotted id is recognised exactly: a longer id does not matc
     assert.deepEqual(cited("Only the longer one: contacts.person-or-company-extra changed"), ["contacts.person-or-company-extra"]);
     assert.deepEqual(cited("Changed CONTACTS.PERSON-OR-COMPANY today"), ["contacts.person-or-company"], "case does not matter");
     assert.deepEqual(cited("xcontacts.person-or-company or contacts.person-or-companyx"), [], "no match inside a longer word");
+  });
+});
+
+test("the regression plan follows edge direction: a change to a dependent does not pull in what it depends on", () => {
+  withApp((app) => {
+    seed(app); // Leads DEPENDS_ON Contacts is approved
+    const signal = app.signals.analyze(submit(app.signals, { title: "Lead source", body: "BR-LEAD-SOURCE-001 changes." }).id);
+    const graphNeighbors = [...signal.analysis.regressionPlan.run, ...signal.analysis.regressionPlan.blocked].filter((c) => c.reasons.every((r) => r.basis === "graph_neighbor"));
+    assert.deepEqual(graphNeighbors, [], "Contacts' checks are not pulled in by a change to Leads, which merely depends on Contacts");
+    assert.ok(signal.analysis.regressionPlan.run.some((c) => c.externalId === "leads.create"), "the Leads check itself is still selected");
   });
 });

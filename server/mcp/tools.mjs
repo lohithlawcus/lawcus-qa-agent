@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { now } from "../core/store.mjs";
 import { ApiContractError } from "../core/api-contracts.mjs";
-import { traverseImpactGraph, executeImpactedTest, proposeGapCoverage, planImpactedTest } from "../core/impacted-testing.mjs";
+import { executeImpactedTest, proposeGapCoverage, planImpactedTest } from "../core/impacted-testing.mjs";
+import { impactedFeatures } from "../core/graph-planner.mjs";
+import { KnowledgeError } from "../core/knowledge.mjs";
 import { buildNativeRunners, NATIVE_SUITE_MEMBERS } from "../testbook/lawcus-native-cases.mjs";
 import { finalizeRun } from "../core/run-outcome.mjs";
 import { closeOutCleanup } from "../core/run-cleanup.mjs";
@@ -54,8 +56,11 @@ export function getFeatureRules({ knowledge }, { featureName }) {
   return group?.items ?? [];
 }
 
+/** The features a CHANGE to `featureName` reaches through APPROVED edges,
+ * following each edge type's direction (a dependency is not a two-way street).
+ * The named feature comes first. */
 export function findAffectedFeatures({ knowledge }, { featureName }) {
-  return traverseImpactGraph(knowledge.approvedGraph(), featureName);
+  return [featureName, ...impactedFeatures(knowledge.approvedGraph(), featureName).keys()];
 }
 
 export function findRelevantTestSuites({ testbook }, { featureName }) {
@@ -268,4 +273,105 @@ export function getFailureEvidenceSummary({ db }, { scenarioResultId }) {
 // Re-exported so an MCP-hosted client could also plan (not execute) an
 // impacted test the same way the web UI's "Check coverage" button does —
 // pure and side-effect-free, no reason to duplicate it under a new name.
+
+// ---------- Knowledge review and the change loop ----------
+//
+// Everything below either READS, or files something PENDING for a person. The
+// MCP identity ("mcp") is a non-human origin, so it cannot approve, flag,
+// resolve or dismiss even if a future change tried to let it; none of those
+// has a tool. A revision proposed here may claim only observed, inferred or
+// assumed evidence, never documented or product-approved, so a reviewer is
+// never told an AI's guess carries an owner's authority.
+
+const MCP_ACTOR = "mcp";
+export const MCP_REVISION_PROVENANCE = ["OBSERVED", "INFERRED", "ASSUMED"];
+export const MCP_HOURLY_LIMIT = 30;
+const TRUSTED_STATES = new Set(["current", "under_review", "stale"]);
+
+/** Knowledge-layer errors become tool errors a caller can act on. */
+function translate(fn) {
+  try {
+    return fn();
+  } catch (error) {
+    if (error instanceof KnowledgeError)
+      throw new McpToolError(error.code === "not_found" ? MCP_ERROR.NOT_FOUND : MCP_ERROR.INVALID_INPUT, error.message);
+    throw error;
+  }
+}
+
+function hourlyCount(db, sql) {
+  return db.prepare(sql).get(new Date(Date.now() - 3600000).toISOString()).n;
+}
+
+export function listFacts({ factCards }, { status = null, feature = null, includeUnapproved = false } = {}) {
+  const facts = factCards.listFacts({ status, feature });
+  return includeUnapproved ? facts : facts.filter((fact) => TRUSTED_STATES.has(fact.derivedStatus));
+}
+
+export function getFact({ factCards }, { reference }) {
+  const card = factCards.factCard(reference);
+  if (!card) throw new McpToolError(MCP_ERROR.NOT_FOUND, `No Knowledge item matches "${reference}".`);
+  const trusted = card.status === "approved";
+  return {
+    ...card,
+    trusted,
+    ...(trusted ? {} : { warning: `This fact is ${card.derivedStatus.replaceAll("_", " ")}, not approved. Do not treat it as a product rule.` }),
+  };
+}
+
+export function listStaleFacts({ changeSignals }, { olderThanDays } = {}) {
+  return changeSignals.staleFacts(olderThanDays ? { olderThanDays } : {});
+}
+
+/** Plans a test request from approved knowledge without running anything. */
+export function planTestRequest({ knowledge, testbook }, { intent }) {
+  if (typeof intent !== "string" || intent.trim().length < 3)
+    throw new McpToolError(MCP_ERROR.INVALID_INPUT, "intent must be a sentence of at least 3 characters.");
+  const plan = planImpactedTest({ intent, knowledge, testbook });
+  return {
+    matched: plan.matched,
+    origin: plan.origin ?? (plan.matched ? "known_pattern" : "none"),
+    status: plan.matched ? (plan.status ?? "ready") : "not_planned",
+    subjectFeatureName: plan.subjectFeatureName ?? null,
+    features: plan.features ?? [],
+    cells: (plan.cells ?? []).map((cell) => ({
+      externalId: cell.externalId, featureName: cell.featureName, covered: cell.covered, blockedReason: cell.blockedReason ?? null,
+      role: cell.role ?? null, reasons: cell.reasons ?? [], prerequisites: cell.prerequisites ?? [],
+    })),
+    blockers: plan.blockers ?? [],
+    reviewRequests: plan.reviewRequests ?? [],
+    uncoveredFeatures: plan.uncoveredFeatures ?? [],
+    factsUsed: (plan.knowledgeItems ?? []).map((item) => ({ semanticId: item.semantic_id, title: item.title })),
+    flaggedFacts: (plan.reviewFlags ?? []).map((flag) => flag.semantic_id),
+    note: "Planning only: nothing was run. A blocked plan lists what is missing. To run a listed check use run_approved_test.",
+  };
+}
+
+export function listChangeSignals({ changeSignals }, { status = null } = {}) {
+  return changeSignals.list({ status });
+}
+
+export function getChangeSignal({ changeSignals }, { signalId }) {
+  return translate(() => changeSignals.get(signalId));
+}
+
+/** Records a change and analyzes it. Changes no fact, test or expectation. */
+export function submitChangeSignal({ db, changeSignals }, input) {
+  if (hourlyCount(db, "SELECT COUNT(*) n FROM change_signals WHERE submitted_by='mcp' AND received_at>?") >= MCP_HOURLY_LIMIT)
+    throw new McpToolError(MCP_ERROR.RATE_LIMITED, `At most ${MCP_HOURLY_LIMIT} change signals may be submitted through MCP per hour.`);
+  return translate(() => {
+    const signal = changeSignals.submit({ ...input, submittedBy: MCP_ACTOR });
+    return signal.duplicate ? signal : { ...changeSignals.analyze(signal.id), duplicate: false };
+  });
+}
+
+/** Files a PENDING revision of an approved fact. A person still has to approve it. */
+export function proposeFactRevision({ db, changeSignals }, { signalId, semanticId, statement, provenance = "INFERRED" }) {
+  if (!MCP_REVISION_PROVENANCE.includes(provenance))
+    throw new McpToolError(MCP_ERROR.INVALID_INPUT, `provenance must be one of ${MCP_REVISION_PROVENANCE.join(", ")}: only a person can claim a documented or product-approved source.`);
+  if (hourlyCount(db, "SELECT COUNT(*) n FROM change_signal_items WHERE created_at>?") >= MCP_HOURLY_LIMIT)
+    throw new McpToolError(MCP_ERROR.RATE_LIMITED, `At most ${MCP_HOURLY_LIMIT} fact revisions may be proposed per hour.`);
+  return translate(() => ({ ...changeSignals.proposeRevision({ signalId, semanticId, statement, provenance, proposedBy: MCP_ACTOR }), status: "pending_review", note: "A person must approve this revision before it changes anything." }));
+}
+
 export { planImpactedTest, proposeGapCoverage };

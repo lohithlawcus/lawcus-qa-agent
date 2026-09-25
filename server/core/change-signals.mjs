@@ -11,7 +11,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { KnowledgeError, PROVENANCE_VALUES, requireHumanApprover } from "./knowledge.mjs";
-import { traverseImpactGraph } from "./impacted-testing.mjs";
+import { impactedFeatures } from "./graph-planner.mjs";
 import { redactText, containsSecret } from "./redact.mjs";
 
 export const SIGNAL_KINDS = ["qa_note", "requirement", "design", "api_spec", "release_note", "code_change", "observed_diff"];
@@ -172,11 +172,13 @@ export function openChangeSignals(db, audit, { knowledge, testbook }) {
           strength >= 2 ? `Covers "${feature}", which the signal concerns.` : `Covers "${feature}", which only loosely matches the signal.`);
       }
     }
+    // Only features a CHANGE to these reaches, following each relation's direction:
+    // a change to a dependency reaches what depends on it, not the other way round.
     const edges = knowledge.approvedGraph();
     for (const [feature] of factFeatures) {
-      for (const neighbor of traverseImpactGraph(edges, feature).filter((name) => name !== feature)) {
+      for (const [neighbor, info] of impactedFeatures(edges, feature)) {
         for (const testCase of casesByFeature.get(neighbor) || []) {
-          addCase(testCase, neighbor, "graph_neighbor", 1, `"${neighbor}" is connected to "${feature}" by an approved dependency.`);
+          addCase(testCase, neighbor, "graph_neighbor", 1, `A change to "${feature}" reaches "${neighbor}": ${info.because}.`);
         }
       }
     }

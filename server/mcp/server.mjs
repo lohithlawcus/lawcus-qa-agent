@@ -5,6 +5,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openStore } from "../core/store.mjs";
 import { openKnowledge } from "../core/knowledge.mjs";
+import { openFactCards } from "../core/fact-cards.mjs";
+import { openChangeSignals, SIGNAL_KINDS } from "../core/change-signals.mjs";
 import { openTestBook } from "../core/testbook.mjs";
 import { openProposals } from "../core/proposals.mjs";
 import { openApiContracts } from "../core/api-contracts.mjs";
@@ -43,14 +45,18 @@ const artifactDirectory = resolve(directory, "artifacts");
 mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
 const resourceOwnership = openResourceOwnership(db, audit, { protectedResourceIds: PROTECTED_RESOURCE_IDS });
 const mutationJournal = openMutationJournal(db, audit);
+const knowledge = openKnowledge(db, audit);
+const testbook = openTestBook(db, audit);
 const ctx = {
   db,
   audit,
   artifactDirectory,
   resourceOwnership,
   cleanupRunner: createCleanupRunner({ resourceOwnership, mutationJournal, resourceLocks: openResourceLocks(db, audit) }),
-  knowledge: openKnowledge(db, audit),
-  testbook: openTestBook(db, audit),
+  knowledge,
+  testbook,
+  factCards: openFactCards(db, { knowledge, testbook }),
+  changeSignals: openChangeSignals(db, audit, { knowledge, testbook }),
   proposals: openProposals(db, audit),
   apiContracts: openApiContracts(db, audit),
   mutationJournal,
@@ -82,7 +88,7 @@ register(
 );
 register(
   "find_affected_features",
-  "Traverses the APPROVED Impact Graph from one feature and returns every feature reached.",
+  "The features a change to one feature reaches through APPROVED relations, following each relation's direction (the named feature comes first).",
   { featureName: z.string().min(1) },
   tools.findAffectedFeatures,
 );
@@ -151,6 +157,72 @@ register(
   "Textual evidence for one failed scenario_results row (status/expected/actual/artifact metadata) — never raw screenshot or trace bytes.",
   { scenarioResultId: z.string().min(1) },
   tools.getFailureEvidenceSummary,
+);
+
+// ---- Knowledge review and the change loop. Read-only, or filing something pending for a person. ----
+register(
+  "list_facts",
+  "Approved Knowledge facts with their state (current, under_review, stale). Pass includeUnapproved to also see pending, rejected and superseded ones, which are never product rules.",
+  {
+    status: z.enum(["current", "under_review", "stale", "pending", "rejected", "retired_duplicate", "superseded", "deprecated"]).optional(),
+    feature: z.string().min(1).optional(),
+    includeUnapproved: z.boolean().optional(),
+  },
+  tools.listFacts,
+);
+register(
+  "get_fact",
+  "One fact in full: who approved it, its source, where it applies, which tests assert it, its history and pending revisions. Accepts an item id, a semantic id or an alias. An unapproved fact carries a warning and trusted:false.",
+  { reference: z.string().min(1) },
+  tools.getFact,
+);
+register(
+  "list_stale_facts",
+  "Approved facts that are volatile by nature and not reviewed for a while, or past their end date.",
+  { olderThanDays: z.number().int().min(1).max(3650).optional() },
+  tools.listStaleFacts,
+);
+register(
+  "plan_test_request",
+  "Plans a request that names a feature from APPROVED knowledge, without running anything: which checks, why each was chosen, what must be set up first, and what blocks the plan. Unapproved relations come back as review requests; destructive requests are refused.",
+  { intent: z.string().min(3).max(1000) },
+  tools.planTestRequest,
+);
+register(
+  "list_change_signals",
+  "Recorded product-change signals (release notes, requirements, QA notes ...) and how many facts and checks each affects.",
+  { status: z.enum(["new", "analyzed", "dismissed"]).optional() },
+  tools.listChangeSignals,
+);
+register(
+  "get_change_signal",
+  "One change signal with its analysis (facts it may touch, checks worth re-running, what is missing) and its proposed revisions and review flags.",
+  { signalId: z.string().uuid() },
+  tools.getChangeSignal,
+);
+register(
+  "submit_change_signal",
+  "Records a product change (with its source) and analyzes it. Changes no fact, test or expected result; credentials pasted into the text are masked; identical text is recorded once. At most 30 per hour.",
+  {
+    kind: z.enum(SIGNAL_KINDS),
+    title: z.string().min(1).max(200),
+    body: z.string().min(1).max(20000),
+    source: z.string().max(200).optional(),
+    sourceRef: z.string().max(500).optional(),
+    occurredAt: z.string().max(40).optional(),
+  },
+  tools.submitChangeSignal,
+);
+register(
+  "propose_fact_revision",
+  "Files a PENDING revision of an existing approved fact from a change signal. Only observed, inferred or assumed evidence may be claimed; a person must approve it and, because it is weaker than a documented rule, must acknowledge that when they do. At most 30 per hour.",
+  {
+    signalId: z.string().uuid(),
+    semanticId: z.string().min(1),
+    statement: z.string().min(1).max(2000),
+    provenance: z.enum(["OBSERVED", "INFERRED", "ASSUMED"]).optional(),
+  },
+  tools.proposeFactRevision,
 );
 
 const transport = new StdioServerTransport();

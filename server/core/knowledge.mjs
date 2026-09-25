@@ -13,7 +13,8 @@ export class KnowledgeError extends Error {
   }
 }
 
-const NON_HUMAN_ORIGINS = new Set(["ai_extraction", "ai_planner", "runner", "network_observer"]);
+// "mcp" is the identity every MCP tool acts as: an AI agent, never a decider.
+const NON_HUMAN_ORIGINS = new Set(["ai_extraction", "ai_planner", "runner", "network_observer", "mcp"]);
 
 export function requireHumanApprover(approver) {
   if (!approver || typeof approver !== "string")
