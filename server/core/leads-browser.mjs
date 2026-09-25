@@ -118,7 +118,13 @@ export async function createLeadViaBrowser({ context, apiContracts, firstName, l
     // not only updates).
     const match = page.url().match(/\/lead\/([a-f0-9-]{36})/);
     if (!match) throw new Error(`Could not determine the created lead's uuid from the post-save URL: ${page.url()}`);
-    return { uuid: match[1], correlation, events: observer.events };
+    return { uuid: match[1], correlation, events: observer.events, screenshot: await page.screenshot({ fullPage: false }).catch(() => null) };
+  } catch (error) {
+    // Same pattern as contacts-browser.mjs's createContactViaBrowser:
+    // attach evidence to the thrown error rather than changing this
+    // function's throw-on-failure contract for every existing caller.
+    error.screenshot = await page.screenshot({ fullPage: false }).catch(() => null);
+    throw error;
   } finally {
     observer.dispose();
     await page.close().catch(() => {});
@@ -154,7 +160,11 @@ export async function verifyLeadMandatoryFieldValidationViaBrowser({ context }) 
 
 /** Opens the lead, reads the named MATTER-scoped custom field's current
  * value, and closes without saving — used both to capture before-state
- * and for independent post-update verification (section 24). */
+ * and for independent post-update verification (section 24). Also
+ * captures a screenshot of this exact moment, the same diagnostic-evidence
+ * pattern as contacts-browser.mjs's equivalent — this is the read a
+ * caller compares against to decide pass/fail, so it's the most useful
+ * single piece of evidence for "why did this fail." */
 export async function readLeadCustomFieldViaBrowser({ context, uuid, fieldName }) {
   const page = await context.newPage();
   try {
@@ -163,7 +173,8 @@ export async function readLeadCustomFieldViaBrowser({ context, uuid, fieldName }
     await openEditMatterCustomFields(page);
     await ensureFieldOnForm(page, fieldName);
     const value = await fieldValueInput(page, fieldName).inputValue();
-    return value;
+    const screenshot = await page.screenshot({ fullPage: false }).catch(() => null);
+    return { value, screenshot };
   } finally {
     await page.close().catch(() => {});
   }
@@ -231,7 +242,8 @@ export async function updateAndRestoreLeadCustomFieldViaBrowser({
 }) {
   if (!runId) throw new Error("updateAndRestoreLeadCustomFieldViaBrowser requires a runId.");
 
-  const beforeValue = await readLeadCustomFieldViaBrowser({ context, uuid, fieldName });
+  const before = await readLeadCustomFieldViaBrowser({ context, uuid, fieldName });
+  const beforeValue = before.value;
   const journalEntry = mutationJournal.recordBeforeState({
     runId,
     environmentId,
@@ -243,13 +255,15 @@ export async function updateAndRestoreLeadCustomFieldViaBrowser({
   });
 
   const { correlation } = await updateLeadCustomFieldViaBrowser({ context, apiContracts, uuid, fieldName, newValue });
-  const afterUpdate = await readLeadCustomFieldViaBrowser({ context, uuid, fieldName });
+  const afterUpdateRead = await readLeadCustomFieldViaBrowser({ context, uuid, fieldName });
+  const afterUpdate = afterUpdateRead.value;
   const updateVerified = afterUpdate === newValue;
 
   const { correlation: restoreCorrelation } = await updateLeadCustomFieldViaBrowser({
     context, apiContracts, uuid, fieldName, newValue: beforeValue,
   });
-  const afterRestore = await readLeadCustomFieldViaBrowser({ context, uuid, fieldName });
+  const afterRestoreRead = await readLeadCustomFieldViaBrowser({ context, uuid, fieldName });
+  const afterRestore = afterRestoreRead.value;
   const restored = afterRestore === beforeValue;
 
   mutationJournal.recordRestoration(journalEntry.id, {
@@ -257,12 +271,17 @@ export async function updateAndRestoreLeadCustomFieldViaBrowser({
     note: restored ? null : `Expected "${beforeValue}", found "${afterRestore}" after restoration.`,
   });
 
+  const screenshot = !updateVerified ? afterUpdateRead.screenshot : afterRestoreRead.screenshot;
+
   return {
     beforeValue,
     updateCorrelation: correlation,
     updateVerified,
+    afterUpdate,
     restoreCorrelation,
     restored,
+    afterRestore,
+    screenshot,
     journalEntry,
   };
 }

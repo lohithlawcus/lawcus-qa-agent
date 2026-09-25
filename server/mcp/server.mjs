@@ -30,8 +30,17 @@ import { McpToolError } from "./tools.mjs";
 const directory = resolve("work/runtime");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
 const { db, audit } = openStore(directory);
+// Same directory server/index.mjs's Core process already writes real
+// evidence into (join(directory,"artifacts")) — MCP-triggered native
+// checks (run_approved_test/run_approved_suite) can now save a failure
+// screenshot there too, so a check run from either surface gets the same
+// diagnostic evidence, not just the one triggered from the app's own UI.
+const artifactDirectory = resolve(directory, "artifacts");
+mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
 const ctx = {
   db,
+  audit,
+  artifactDirectory,
   knowledge: openKnowledge(db, audit),
   testbook: openTestBook(db, audit),
   proposals: openProposals(db, audit),

@@ -162,7 +162,7 @@ function finishMcpRun(db, runId, results) {
  * simulation). Refuses anything not already an approved case; never runs
  * an "unknown primitive" (this is exactly what execute_unknown_primitive
  * in the Never-expose list would be, so there is no path to it here). */
-export async function runApprovedTest({ db, testbook, apiContracts, mutationJournal }, { externalId }) {
+export async function runApprovedTest({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit }, { externalId }) {
   const testCase = testbook.findCase(externalId);
   if (!testCase) throw new McpToolError(MCP_ERROR.NOT_FOUND, `No TestBook case with external_id "${externalId}".`);
   if (testCase.status !== "approved")
@@ -178,7 +178,7 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
   const plan = { cells: [{ featureName: testCase.featureName, recordState: "n/a", externalId, covered: true }] };
   let results;
   try {
-    results = await executeImpactedTest({ plan, runners: boundRunners, db, runId, testbook, delayBetweenRunsMs: 0 });
+    results = await executeImpactedTest({ plan, runners: boundRunners, db, runId, testbook, delayBetweenRunsMs: 0, artifactDirectory, audit });
   } finally {
     finishMcpRun(db, runId, results ?? []);
   }
@@ -188,7 +188,7 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
 /** section 41's run_approved_suite — every native case in a known suite
  * (server/testbook/lawcus-native-cases.mjs's NATIVE_SUITE_MEMBERS), or the
  * standard fixed login-essentials plan for that one DSL suite. */
-export async function runApprovedSuite({ db, testbook, apiContracts, mutationJournal }, { suiteName }) {
+export async function runApprovedSuite({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit }, { suiteName }) {
   const members = NATIVE_SUITE_MEMBERS[suiteName];
   if (!members)
     throw new McpToolError(MCP_ERROR.NOT_RUNNABLE, `"${suiteName}" is not a suite this MCP server can run yet. Known suites: ${Object.keys(NATIVE_SUITE_MEMBERS).join(", ")}.`);
@@ -201,7 +201,7 @@ export async function runApprovedSuite({ db, testbook, apiContracts, mutationJou
   }) };
   let results;
   try {
-    results = await executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs: 8000 });
+    results = await executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs: 8000, artifactDirectory, audit });
   } finally {
     finishMcpRun(db, runId, results ?? []);
   }

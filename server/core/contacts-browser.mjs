@@ -90,8 +90,28 @@ export const VIEWPORT = { width: 1400, height: 900 };
 const EDIT_BUTTON_POSITION = { x: 1313, y: 85 };
 
 async function openEditCustomFields(page) {
-  await page.mouse.click(EDIT_BUTTON_POSITION.x, EDIT_BUTTON_POSITION.y);
-  await page.getByText("Edit Contact", { exact: true }).waitFor({ timeout: 10000 });
+  // Real, reproducible flakiness (hit live 2026-09-24, 2 of 3 runs): the
+  // fixed-position click above lands before the detail page has finished
+  // its own real staging load, so the "Edit Contact" dialog never opens —
+  // a timing race against the same documented staging cold-start
+  // slowness already worked around elsewhere in this file, not a wrong
+  // coordinate (one of those 3 runs succeeded at the identical position).
+  // Retrying the whole click-then-wait cycle, not just the wait, mirrors
+  // selectContactDropdownOption's own "retry the whole cycle" fix for its
+  // own known-flaky click above.
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await page.mouse.click(EDIT_BUTTON_POSITION.x, EDIT_BUTTON_POSITION.y);
+    try {
+      await page.getByText("Edit Contact", { exact: true }).waitFor({ timeout: 10000 });
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      await page.waitForTimeout(1000);
+    }
+  }
+  if (lastError) throw lastError;
   await page.getByText("Custom Fields", { exact: true }).first().click();
   await page.waitForTimeout(500);
 }
@@ -126,21 +146,27 @@ async function ensureFieldOnForm(page, fieldName) {
 async function removeFieldFromForm(page, valueInputLocator) {
   const inputHandle = await valueInputLocator.elementHandle();
   if (!inputHandle) return false;
-  const removeHandle = await page.evaluateHandle((input) => {
+  // Real bug hit live 2026-09-24: finding the delete button via
+  // evaluateHandle() and clicking the returned handle in a separate step
+  // left a window for a React re-render to detach that exact node between
+  // the two round trips ("Element is not attached to the DOM"). Finding
+  // and clicking inside one page.evaluate() call closes that window —
+  // there's no gap between "found it" and "clicked it" for a re-render to
+  // land in.
+  return await page.evaluate((input) => {
     let row = input;
     for (let i = 0; i < 6 && row.parentElement; i++) {
       row = row.parentElement;
       const btn = Array.from(row.querySelectorAll("button, [role='button']")).find((b) =>
         b.className.includes("deleteIconBtn"),
       );
-      if (btn) return btn;
+      if (btn) {
+        btn.click();
+        return true;
+      }
     }
-    return null;
+    return false;
   }, inputHandle);
-  const removeElement = removeHandle.asElement();
-  if (!removeElement) return false;
-  await removeElement.click();
-  return true;
 }
 
 /** Opens the New Contact dialog from the Contacts list — shared by every
@@ -216,7 +242,15 @@ export async function createContactViaBrowser({ context, apiContracts, firstName
     // not only updates).
     const match = page.url().match(/\/contact\/([a-f0-9-]{36})/);
     if (!match) throw new Error(`Could not determine the created contact's uuid from the post-save URL: ${page.url()}`);
-    return { uuid: match[1], correlation, events: observer.events };
+    return { uuid: match[1], correlation, events: observer.events, screenshot: await page.screenshot({ fullPage: false }).catch(() => null) };
+  } catch (error) {
+    // Attaches evidence to the thrown error itself rather than changing
+    // this function into a never-throws contract — every existing caller
+    // still gets the same thrown Error it always did, and a caller that
+    // knows to look (executeImpactedTest) can read error.screenshot for
+    // "why did this fail" without every other caller needing to change.
+    error.screenshot = await page.screenshot({ fullPage: false }).catch(() => null);
+    throw error;
   } finally {
     observer.dispose();
     await page.close().catch(() => {});
@@ -746,10 +780,34 @@ export async function verifyMandatoryFieldValidationCompanyViaBrowser({ context 
   }
 }
 
+/** Locates a custom field's own value input on the Edit Contact form by
+ * its real DOM id (id="custom-component-<Field Name>", spaces escaped) —
+ * the same id convention confirmed live on the New Contact dialog and
+ * used by createContactAllFieldsViaBrowser above. Live-verified 2026-09-24
+ * on the Edit form too: a real fix, not an assumption — the Edit form for
+ * a contact with several custom fields had 29 text inputs, with "Custom
+ * Text" at position 25, three real fields short of ".last()" (the prior
+ * approach here), which is why that real bug (real bug hit live
+ * 2026-09-23: an impacted-test run reported updateVerified:false for no
+ * visible reason) went undetected until this fix — the same class of bug
+ * PR #3 already fixed for the New Contact dialog, just never carried over
+ * to this separate edit-existing-contact path.
+ */
+function customFieldValueInput(page, fieldName) {
+  return page.locator(`#custom-component-${fieldName.replace(/ /g, "\\ ")}`);
+}
+
 /** Opens the contact, reads the named custom field's current value, and
  * closes without saving anything — a real, separate navigation used both
  * to capture before-state and for independent post-update verification
- * (section 24). */
+ * (section 24). Also captures a screenshot of this exact moment: this is
+ * the read a caller like updateAndRestoreContactCustomFieldViaBrowser
+ * compares against to decide pass/fail, so it's the single most useful
+ * piece of evidence for "why did this fail." Unlike runLive's login
+ * screenshots, nothing here is masked — this page only ever shows the
+ * known, QA-owned fixture contact's own fields (never a real customer
+ * record), and the whole point of this screenshot is to make the actual
+ * field value visible. */
 export async function readContactCustomFieldViaBrowser({ context, uuid, fieldName }) {
   const page = await context.newPage();
   try {
@@ -757,8 +815,9 @@ export async function readContactCustomFieldViaBrowser({ context, uuid, fieldNam
     await page.waitForTimeout(2000);
     await openEditCustomFields(page);
     await ensureFieldOnForm(page, fieldName);
-    const value = await page.locator('input[type="text"]').last().inputValue();
-    return value;
+    const value = await customFieldValueInput(page, fieldName).inputValue();
+    const screenshot = await page.screenshot({ fullPage: false }).catch(() => null);
+    return { value, screenshot };
   } finally {
     await page.close().catch(() => {});
   }
@@ -784,11 +843,11 @@ export async function updateContactCustomFieldViaBrowser({ context, apiContracts
       // Restoring to "unset" — see removeFieldFromForm's comment. A no-op
       // if the field isn't on the form at all (already unset).
       if ((await page.getByText(fieldName, { exact: true }).count()) > 0) {
-        await removeFieldFromForm(page, page.locator('input[type="text"]').last());
+        await removeFieldFromForm(page, customFieldValueInput(page, fieldName));
       }
     } else {
       await ensureFieldOnForm(page, fieldName);
-      const valueInput = page.locator('input[type="text"]').last();
+      const valueInput = customFieldValueInput(page, fieldName);
       await valueInput.click();
       await valueInput.fill(newValue);
     }
@@ -828,7 +887,8 @@ export async function updateAndRestoreContactCustomFieldViaBrowser({
 }) {
   if (!runId) throw new Error("updateAndRestoreContactCustomFieldViaBrowser requires a runId.");
 
-  const beforeValue = await readContactCustomFieldViaBrowser({ context, uuid, fieldName });
+  const before = await readContactCustomFieldViaBrowser({ context, uuid, fieldName });
+  const beforeValue = before.value;
   const journalEntry = mutationJournal.recordBeforeState({
     runId,
     environmentId,
@@ -840,13 +900,15 @@ export async function updateAndRestoreContactCustomFieldViaBrowser({
   });
 
   const { correlation } = await updateContactCustomFieldViaBrowser({ context, apiContracts, uuid, fieldName, newValue });
-  const afterUpdate = await readContactCustomFieldViaBrowser({ context, uuid, fieldName });
+  const afterUpdateRead = await readContactCustomFieldViaBrowser({ context, uuid, fieldName });
+  const afterUpdate = afterUpdateRead.value;
   const updateVerified = afterUpdate === newValue;
 
   const { correlation: restoreCorrelation } = await updateContactCustomFieldViaBrowser({
     context, apiContracts, uuid, fieldName, newValue: beforeValue,
   });
-  const afterRestore = await readContactCustomFieldViaBrowser({ context, uuid, fieldName });
+  const afterRestoreRead = await readContactCustomFieldViaBrowser({ context, uuid, fieldName });
+  const afterRestore = afterRestoreRead.value;
   const restored = afterRestore === beforeValue;
 
   mutationJournal.recordRestoration(journalEntry.id, {
@@ -854,12 +916,21 @@ export async function updateAndRestoreContactCustomFieldViaBrowser({
     note: restored ? null : `Expected "${beforeValue}", found "${afterRestore}" after restoration.`,
   });
 
+  // The most diagnostically useful screenshot for "why did this fail":
+  // the read that actually decided pass/fail. If the update itself wasn't
+  // verified, that's the read that matters; otherwise the restore read is
+  // both the more recent and (if it also failed) the more relevant one.
+  const screenshot = !updateVerified ? afterUpdateRead.screenshot : afterRestoreRead.screenshot;
+
   return {
     beforeValue,
     updateCorrelation: correlation,
     updateVerified,
+    afterUpdate,
     restoreCorrelation,
     restored,
+    afterRestore,
+    screenshot,
     journalEntry,
   };
 }

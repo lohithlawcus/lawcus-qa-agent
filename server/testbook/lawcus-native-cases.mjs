@@ -292,6 +292,44 @@ const KNOWN_CONTACT_UUID = "e2bf71a0-ae87-11f1-ab8e-f18331cbd381"; // "QA Batch 
 const KNOWN_CONTACT_COMPANY_UUID = "9f1c75c0-b1d0-11f1-8594-1376676d24eb"; // "QA Agent - <timestamp>" (Company)
 const KNOWN_LEAD_UUID = "c59e9ec0-b115-11f1-b4fe-1feb32eda16d"; // "QA Agent - 1789484203935"
 
+/** Builds a {passed, actual, screenshot, reason} outcome for an
+ * update-and-restore custom-field check (Contacts and Leads share the
+ * exact same four pass/fail conditions and diagnostic fields) — one
+ * place for this so a plain "updateVerified:false" JSON blob never has
+ * to stand in for a real explanation again (real gap hit live
+ * 2026-09-23: a failed run gave no way to tell which of these four things
+ * actually went wrong). */
+function customFieldUpdateOutcome(r) {
+  const passed = r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch;
+  const reasons = [];
+  if (!r.updateVerified) reasons.push(`After updating the field, it read "${r.afterUpdate}" instead of the new value that was set.`);
+  if (!r.restored) reasons.push(`After restoring the field, it read "${r.afterRestore}" instead of its original value.`);
+  if (!r.updateCorrelation.contractMatch) reasons.push(`The update request didn't match the approved contract${r.updateCorrelation.mismatchReason ? `: ${r.updateCorrelation.mismatchReason}` : "."}`);
+  if (!r.restoreCorrelation.contractMatch) reasons.push(`The restore request didn't match the approved contract${r.restoreCorrelation.mismatchReason ? `: ${r.restoreCorrelation.mismatchReason}` : "."}`);
+  return {
+    passed,
+    actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }),
+    screenshot: r.screenshot,
+    reason: passed ? null : reasons.join(" "),
+  };
+}
+
+/** Same idea as customFieldUpdateOutcome, for the simpler create-and-
+ * verify-network-contract checks (Contacts and Leads share the same one
+ * pass/fail condition here). A thrown error (e.g. no uuid found in the
+ * post-save URL) still reaches executeImpactedTest as a thrown error, not
+ * through this helper — its own screenshot travels on error.screenshot,
+ * attached where it's thrown (contacts-browser.mjs / leads-browser.mjs). */
+function createOutcome(r, recordKind) {
+  const passed = r.correlation.contractMatch && r.correlation.cardinalityOk;
+  return {
+    passed,
+    actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }),
+    screenshot: r.screenshot,
+    reason: passed ? null : `The ${recordKind} was created, but its network request didn't match the approved create contract${r.correlation.mismatchReason ? `: ${r.correlation.mismatchReason}` : "."}`,
+  };
+}
+
 /**
  * The single, shared wiring from a native case's external_id to the real
  * function that executes it — used by both the HTTP /impacted-tests/run
@@ -304,11 +342,11 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
   return {
     "contacts.custom_field_update_existing": async () => {
       const r = await runContactCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_CONTACT_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
-      return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
+      return customFieldUpdateOutcome(r);
     },
     "contacts.create_new_verifies_custom_fields": async () => {
       const r = await runContactCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts) });
-      return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
+      return createOutcome(r, "contact");
     },
     "contacts.create_mandatory_field_validation": async () => {
       const r = await runContactMandatoryFieldValidationCheck();
@@ -342,15 +380,15 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
     },
     "contacts.custom_field_update_existing_company": async () => {
       const r = await runContactCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_CONTACT_COMPANY_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
-      return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
+      return customFieldUpdateOutcome(r);
     },
     "leads.custom_field_update_existing": async () => {
       const r = await runLeadCustomFieldCheck({ apiContracts, mutationJournal, runId, uuid: KNOWN_LEAD_UUID, fieldName: "Custom Text", newValue: `QA impacted-test ${ts}` });
-      return { passed: r.updateVerified && r.restored && r.updateCorrelation.contractMatch && r.restoreCorrelation.contractMatch, actual: JSON.stringify({ updateVerified: r.updateVerified, restored: r.restored }) };
+      return customFieldUpdateOutcome(r);
     },
     "leads.create_new_verifies_custom_fields": async () => {
       const r = await runLeadCreationCheck({ apiContracts, firstName: "QA Agent", lastName: String(ts + 1), matterName: `QA Agent - ${ts + 1}` });
-      return { passed: r.correlation.contractMatch && r.correlation.cardinalityOk, actual: JSON.stringify({ uuid: r.uuid, contractMatch: r.correlation.contractMatch }) };
+      return createOutcome(r, "lead");
     },
     "leads.create_mandatory_field_validation": async () => {
       const r = await runLeadMandatoryFieldValidationCheck();

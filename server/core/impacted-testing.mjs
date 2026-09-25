@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { sealEvidence } from "./setup.mjs";
+import { now } from "./store.mjs";
 
 // V5 Step 16 — Natural-Language Impacted Testing (master spec Step 16;
 // Knowledge Base guide section 42's identical flow):
@@ -176,7 +180,7 @@ export function proposeGapCoverage({ proposals, plan, generatedBy = "impacted_te
  */
 const LOGIN_IDENTITY_TIMEOUT_PATTERN = /getByPlaceholder\('Search your practice'/;
 
-export async function executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs = 8000 }) {
+export async function executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs = 8000, artifactDirectory = null, audit = null }) {
   const results = [];
   let executedAny = false;
   for (const cell of plan.cells) {
@@ -189,24 +193,32 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
     if (executedAny && delayBetweenRunsMs > 0) await new Promise((resolve) => setTimeout(resolve, delayBetweenRunsMs));
     executedAny = true;
     const startedAt = Date.now();
-    let status, actual, retried = false;
+    let status, actual, retried = false, screenshot = null, reason = null;
     try {
       const outcome = await runner();
       status = outcome.passed ? "passed" : "failed";
       actual = outcome.actual;
+      screenshot = outcome.screenshot ?? null;
+      reason = outcome.reason ?? null;
     } catch (error) {
+      screenshot = error.screenshot ?? null;
       if (!LOGIN_IDENTITY_TIMEOUT_PATTERN.test(error.message)) {
         status = "failed";
         actual = `Execution error: ${error.message}`;
+        reason = actual;
       } else {
         retried = true;
         try {
           const outcome = await runner();
           status = outcome.passed ? "passed" : "failed";
           actual = `(retried once after the first login timed out) ${outcome.actual}`;
+          screenshot = outcome.screenshot ?? null;
+          reason = outcome.reason ?? null;
         } catch (retryError) {
           status = "failed";
           actual = `Execution error (after one retry): ${retryError.message}`;
+          reason = actual;
+          screenshot = retryError.screenshot ?? null;
         }
       }
     }
@@ -228,6 +240,27 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
       definition?.testCaseId ?? null,
       definition?.versionId ?? null,
     );
+    // Evidence capture (real gap hit live 2026-09-23: a failed run had no
+    // screenshot and no plain-English explanation, just a JSON blob).
+    // Best-effort and additive only — a screenshot that fails to save
+    // never changes status, matching this table's `scenario_result_id`
+    // column being nullable-by-design rather than a hard requirement.
+    if (screenshot && artifactDirectory) {
+      try {
+        mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
+        const filename = `${randomUUID()}.png.enc`;
+        writeFileSync(join(artifactDirectory, filename), await sealEvidence(screenshot), { mode: 0o600 });
+        db.prepare("INSERT INTO artifacts VALUES(?,?,?,?,?,?)").run(randomUUID(), runId, scenarioResultId, "screenshot", filename, now());
+      } catch {
+        // Evidence saving is a diagnostic extra, never the check's own
+        // pass/fail signal — see the comment above.
+      }
+    }
+    if (status === "failed" && reason) {
+      const questionId = randomUUID();
+      db.prepare("INSERT INTO clarifications(id,run_id,question,created_at) VALUES(?,?,?,?)").run(questionId, runId, reason, now());
+      audit?.("clarification.opened", questionId, { runId, scenario: cell.externalId });
+    }
     results.push({ ...cell, executed: true, status, actual, retried, scenarioResultId });
   }
   return results;

@@ -978,7 +978,7 @@ const server = createServer(
         let results = [];
         let filedProposals = [];
         try {
-          results = await executeImpactedTest({ plan, runners, db, runId, testbook });
+          results = await executeImpactedTest({ plan, runners, db, runId, testbook, artifactDirectory, audit });
           filedProposals = proposeGapCoverage({ proposals, plan });
           const anyFailed = results.some((r) => r.executed && r.status === "failed");
           db.prepare("UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?").run(
