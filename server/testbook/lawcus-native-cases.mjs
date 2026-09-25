@@ -400,6 +400,19 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId }) {
 /** Idempotently syncs both native case sets into the TestBook. Safe to
  * call on every server startup, same as every other seed function in this
  * project — testbook.syncCases() is already a no-op when nothing changed. */
+/**
+ * Cases whose automation is known to be broken, keyed by external_id.
+ * Code is the authority (like a case's own status): quarantining or
+ * releasing a case is a reviewed change to this map, applied on every
+ * startup by seedLawcusNativeCases. A quarantined case keeps its
+ * definition, versions and history; it is simply never run or counted as
+ * coverage until it is removed from here after a fresh staging pass.
+ */
+export const NATIVE_QUARANTINE = {
+  "contacts.create_all_fields_verified_on_detail_page":
+    "Last real staging run failed (2026-09-18): the Tag picker locator targets [role=\"option\"] but the tenant's tag chips are plain elements, and the Custom Text / Custom Matter fixes were never re-verified on staging. Release only after a fresh staging run passes with an empty `missing` list.",
+};
+
 export function seedLawcusNativeCases(testbook) {
   testbook.syncCases({
     featureName: "Contacts",
@@ -449,4 +462,8 @@ export function seedLawcusNativeCases(testbook) {
     priority: "normal",
     entries: UPDATE_LEAD_CASES,
   });
+  for (const externalId of Object.values(NATIVE_SUITE_MEMBERS).flat()) {
+    const reason = NATIVE_QUARANTINE[externalId];
+    testbook.setAutomationReadiness(externalId, reason ? "quarantined" : "ready", reason ?? null);
+  }
 }

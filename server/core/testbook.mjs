@@ -178,6 +178,15 @@ export function openTestBook(db, audit) {
             version: nextVersion,
           });
         }
+        // Code is the authority for a synced case's status. Without this, a
+        // status change that leaves the descriptor text (and so its hash)
+        // unchanged never reached the database: only the version-bump branch
+        // above wrote status.
+        const currentStatus = db.prepare("SELECT status FROM test_cases WHERE id=?").get(testCase.id)?.status;
+        if (currentStatus && currentStatus !== definition.status) {
+          db.prepare("UPDATE test_cases SET status=? WHERE id=?").run(definition.status, testCase.id);
+          audit?.("testbook.case.status_synced", testCase.id, { externalId: definition.id, from: currentStatus, to: definition.status });
+        }
         synced.push({ key, externalId: definition.id, testCaseId: testCase.id, versionId });
       }
       return synced;
@@ -230,12 +239,34 @@ export function openTestBook(db, audit) {
         priority: testCase.priority,
         risk: testCase.risk,
         status: testCase.status,
+        automationReadiness: testCase.automation_readiness,
+        quarantineReason: testCase.quarantine_reason,
+        // Approved as a definition AND its automation isn't known-broken.
+        // Approval alone never makes a case runnable or countable.
+        runnable: testCase.status === "approved" && testCase.automation_readiness === "ready",
         currentVersion: testCase.current_version,
         featureName: testCase.feature_name,
         suiteName: testCase.suite_name,
         source: version?.dsl_source ?? null,
         stats: caseStats(testCase.id),
       };
+    },
+
+    /** Marks a case's automation as known-broken ("quarantined") or usable
+     * ("ready"), independent of its review status. History is preserved: a
+     * quarantined case keeps its definition, versions and past results; it
+     * just stops being run or counted as coverage. Idempotent — an
+     * unchanged value writes and audits nothing. */
+    setAutomationReadiness(externalId, readiness, reason = null) {
+      if (!["ready", "quarantined"].includes(readiness)) throw new Error(`Unknown automation readiness: ${readiness}`);
+      if (readiness === "quarantined" && !reason) throw new Error("Quarantining a case requires a reason.");
+      const row = db.prepare("SELECT id, automation_readiness, quarantine_reason FROM test_cases WHERE external_id=?").get(externalId);
+      if (!row) return false;
+      const nextReason = readiness === "quarantined" ? reason : null;
+      if (row.automation_readiness === readiness && (row.quarantine_reason ?? null) === nextReason) return false;
+      db.prepare("UPDATE test_cases SET automation_readiness=?, quarantine_reason=? WHERE id=?").run(readiness, nextReason, row.id);
+      audit?.("testbook.case.readiness_changed", row.id, { externalId, from: row.automation_readiness, to: readiness });
+      return true;
     },
 
     /** Links pre-existing scenario_results rows (written before the
@@ -292,6 +323,9 @@ export function openTestBook(db, audit) {
                 priority: testCase.priority,
                 risk: testCase.risk,
                 status: testCase.status,
+                automationReadiness: testCase.automation_readiness,
+                quarantineReason: testCase.quarantine_reason,
+                runnable: testCase.status === "approved" && testCase.automation_readiness === "ready",
                 tags: JSON.parse(testCase.tags),
                 currentVersion: testCase.current_version,
                 stats: caseStats(testCase.id),
