@@ -318,6 +318,8 @@ type Detail = Run & {
     actual: string;
     duration_ms: number;
     healed: number;
+    failure_class?: "functional" | "infrastructure" | "automation" | "integrity" | "unclassified" | null;
+    reason_code?: string | null;
   }[];
   artifacts: { id: string; scenario_result_id: string; kind: string }[];
   clarifications: Question[];
@@ -1159,6 +1161,21 @@ export default function Home() {
                           <div className="scenario-copy">
                             <h3>{r.title}</h3>
                             <p>{r.actual}</p>
+                            {r.status !== "passed" && r.failure_class && r.failure_class !== "functional" && (
+                              <p className="small-note">
+                                <Badge variant="outline">
+                                  {r.failure_class === "infrastructure"
+                                    ? "Environment or tooling problem"
+                                    : r.failure_class === "automation"
+                                      ? "The check could not drive the page"
+                                      : r.failure_class === "integrity"
+                                        ? "A record or evidence could not be saved"
+                                        : "Unrecognised error, needs a look"}
+                                </Badge>{" "}
+                                This does not show that Lawcus itself is wrong.
+                                {r.reason_code ? ` (${r.reason_code})` : ""}
+                              </p>
+                            )}
                             {r.healed === 1 && (
                               <Badge variant="outline">
                                 Technical locator repair confirmed
