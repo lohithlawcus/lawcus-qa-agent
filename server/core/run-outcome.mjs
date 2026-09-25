@@ -83,3 +83,17 @@ export function finalizeRun(db, runId, { results = null, planned = null, error =
   );
   return verdict;
 }
+
+/** Finalizes a run whose per-check results were written to scenario_results as
+ * it went (the browser-driven Login suite). Reads them back, so the verdict
+ * comes from what was really recorded, and treats planned checks that never got
+ * a row as not run. Same rules as every other run: only a functional failure
+ * fails it, and anything not fully executed is never a pass. */
+export function finalizeFromSavedResults(db, runId, { planned, extraSummary = "" }) {
+  const results = db
+    .prepare("SELECT status, failure_class FROM scenario_results WHERE run_id=?")
+    .all(runId)
+    .map((row) => ({ executed: true, status: row.status, failureClass: row.failure_class }));
+  while (results.length < planned) results.push({ executed: false });
+  return finalizeRun(db, runId, { results, extraSummary });
+}

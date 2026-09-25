@@ -18,6 +18,8 @@ import {attachRecorder} from './recorder.mjs';
 import {updateAndRestoreContactCustomFieldViaBrowser,createContactViaBrowser,createCompanyContactViaBrowser,createContactAllFieldsViaBrowser,verifyPhoneNumberValidationViaBrowser,verifyBillingRateRequiredValidationViaBrowser,verifyMandatoryFieldValidationViaBrowser,verifyMandatoryFieldValidationCompanyViaBrowser,VIEWPORT as CONTACTS_VIEWPORT} from './contacts-browser.mjs';
 import {updateAndRestoreLeadCustomFieldViaBrowser,createLeadViaBrowser,verifyLeadMandatoryFieldValidationViaBrowser,VIEWPORT as LEADS_VIEWPORT} from './leads-browser.mjs';
 import {ApiContractError} from './api-contracts.mjs';
+import {CheckAssertionError,classifyLoginFailure,classifyReportedFailure,classifyThrown,EVIDENCE_SAVE_FAILED} from './failure-class.mjs';
+import {finalizeRun,finalizeFromSavedResults} from './run-outcome.mjs';
 import {createMatterForContactViaBrowser,verifyMatterMandatoryFieldValidationViaBrowser} from './matters-browser.mjs';
 // V5 Step 11 / section 23 — which real API request each login scenario is
 // expected to trigger. 'logout' is intentionally absent: no logout API
@@ -154,7 +156,7 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
   // change doesn't touch that spacing.
   browser=await launch(proxy,false);
   for(const scenario of plan.scenarios){
-   const id=randomUUID();const started=Date.now();const events=[];const blocked=new Set();let context;let page;let observer;let actual=liveDescriptions[scenario].expected;let status='passed';let healed=false;let candidate;let loginRequests=0;let loginStatus;let logoutRequested=false;let logoutRequests=0;let failureCategory='behavior-or-automation';
+   const id=randomUUID();const started=Date.now();const events=[];const blocked=new Set();let context;let page;let observer;let actual=liveDescriptions[scenario].expected;let status='passed';let healed=false;let candidate;let loginRequests=0;let loginStatus;let logoutRequested=false;let logoutRequests=0;let failureCategory='behavior-or-automation';let classification=null;let evidenceProblem=false;
    const event=(action,result)=>events.push({at:now(),action,result});
    try{
     // Bumped from 12000 -> 35000 (2026-09-17): a real Co Server run's
@@ -194,12 +196,12 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
     const email=await field(page,'email',old?.email);const password=await field(page,'password',old?.password);const submit=await submitButton(page,old?.submit);
     candidate={email:email.fingerprint,password:password.fingerprint,submit:submit.fingerprint,assertionContract:'staging-login-v1',origin:origins.app};
     if(scenario==='password_masked'){
-     if(await password.loc.getAttribute('type')!=='password')throw new Error('The password is not masked.');event('Check password masking','passed');
+     if(await password.loc.getAttribute('type')!=='password')throw new CheckAssertionError('The password is not masked.');event('Check password masking','passed');
     }else if(scenario==='empty_fields'){
      await submit.loc.click();
      await page.getByText('Email is required',{exact:true}).waitFor({state:'visible'});
      await page.getByText('Password is required',{exact:true}).waitFor({state:'visible'});
-     if(loginRequests!==0||await password.loc.count()!==1||new URL(page.url()).pathname!=='/login')throw new Error('Empty credentials were submitted or no validation was observed.');event('Submit empty fields','validation shown without a network submission');
+     if(loginRequests!==0||await password.loc.count()!==1||new URL(page.url()).pathname!=='/login')throw new CheckAssertionError('Empty credentials were submitted or no validation was observed.');event('Submit empty fields','validation shown without a network submission');
     }else{
      if(authenticationBlocked)throw new Error('An earlier authentication attempt failed; additional attempts are stopped.');
      audit('login.attempt',runId,{scenario,environment:book.environment_id});
@@ -207,14 +209,14 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
      await submit.loc.click();event('Submit login','one attempt');
      if(scenario==='invalid_password'){
       await page.getByRole('alert').filter({hasText:/credentials|password|access|incorrect/i}).waitFor();
-      if(![400,401,403].includes(loginStatus))throw new Error('The API did not explicitly reject the credentials.');
+      if(![400,401,403].includes(loginStatus))throw new CheckAssertionError('The API did not explicitly reject the credentials.');
       await page.goto(origins.app+'/dashboard');await field(page,'password',candidate.password);
-      if(new URL(page.url()).pathname!=='/login')throw new Error('Protected content remained accessible.');event('Check denial','API denial and login page verified');
+      if(new URL(page.url()).pathname!=='/login')throw new CheckAssertionError('Protected content remained accessible.');event('Check denial','API denial and login page verified');
      }else{
       await assertIdentity(page,creds.username,origins.app);event('Verify authenticated account','dedicated QA identity matched');
       if(scenario==='logout'){
        const out=page.getByRole('menuitem',{name:'Logout',exact:true});logoutRequested=true;event('Choose logout','requested');await out.click();await field(page,'password',candidate.password);await page.goto(origins.app+'/dashboard');await field(page,'password',candidate.password);
-       if(new URL(page.url()).pathname!=='/login')throw new Error('The test browser remained authenticated after logout.');event('Sign out and revisit protected route','login required');
+       if(new URL(page.url()).pathname!=='/login')throw new CheckAssertionError('The test browser remained authenticated after logout.');event('Sign out and revisit protected route','login required');
       }else{await page.keyboard.press('Escape');}
      }
     }
@@ -227,10 +229,11 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
     if(['valid_login','logout'].includes(scenario))authenticationBlocked=true;
     failed++;status='failed';actual='The expected result was not confirmed. Expectations have not been changed.';
     if(!page){failureCategory='runner';actual='The browser could not create an isolated session.';}
-    else if(loginStatus===401||loginStatus===403){failureCategory='authentication-rejected';actual='Staging rejected the dedicated account credentials. Update the saved account before trying again; further login attempts were stopped.';}
+    else if((loginStatus===401||loginStatus===403)&&scenario!=='invalid_password'){failureCategory='authentication-rejected';actual='Staging rejected the dedicated account credentials. Update the saved account before trying again; further login attempts were stopped.';}
     else if(authenticationBlocked&&loginRequests===0&&['valid_login','logout'].includes(scenario)){failureCategory='earlier-authentication-failure';actual='This check did not attempt another login because an earlier authentication check failed.';}
+    classification=classifyLoginFailure({error,page,loginStatus,scenario,authenticationBlocked,loginRequests});
     event('Check stopped',failureCategory);
-    const questionId=randomUUID();db.prepare('INSERT INTO clarifications(id,run_id,question,created_at) VALUES(?,?,?,?)').run(questionId,runId,failureCategory==='authentication-rejected'?'Staging rejected the saved dedicated account. Please verify and update it in Environment; do not enter passwords here.':failureCategory==='earlier-authentication-failure'?'An earlier authentication failure prevented this check. Resolve that failure before another run.':failureCategory==='page-load-timeout'?'The staging page did not load in time. Check availability before another run.':`During “${liveDescriptions[scenario].title}”, I could not confirm the expected behavior. ${liveDescriptions[scenario].expected} Review the evidence before deciding whether application behavior or automation needs correction.`,now());
+    const questionId=randomUUID();db.prepare('INSERT INTO clarifications(id,run_id,question,created_at) VALUES(?,?,?,?)').run(questionId,runId,`${classification.explanation} [${classification.failureClass}: ${classification.reasonCode}] `+(failureCategory==='authentication-rejected'?'Staging rejected the saved dedicated account. Please verify and update it in Environment; do not enter passwords here.':failureCategory==='earlier-authentication-failure'?'An earlier authentication failure prevented this check. Resolve that failure before another run.':failureCategory==='page-load-timeout'?'The staging page did not load in time. Check availability before another run.':`During “${liveDescriptions[scenario].title}”, I could not confirm the expected behavior. ${liveDescriptions[scenario].expected} Review the evidence before deciding whether application behavior or automation needs correction.`),now());
     audit('clarification.opened',questionId,{runId,scenario});
    }
    observer?.dispose();
@@ -251,7 +254,7 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
      const contract=apiContracts.resolveApprovedContract(expectation.semanticId);
      const result=correlateObservation({contract,events:observer.events,host:new URL(origins.api).hostname,cardinality:expectation.cardinality});
      pendingObservation={contractId:contract.id,semanticId:expectation.semanticId,expectedCardinality:expectation.cardinality,result};
-     if(status==='passed'&&!result.contractMatch){failed++;status='failed';actual=`The UI behaved as expected, but the network check failed: ${result.mismatchReason}`;event('Network contract check',result.mismatchReason);}
+     if(status==='passed'&&!result.contractMatch){failed++;status='failed';actual=`The UI behaved as expected, but the network check failed: ${result.mismatchReason}`;classification=classifyReportedFailure(result.mismatchReason);event('Network contract check',result.mismatchReason);}
      else event('Network contract check',result.contractMatch?'matched':'not verified (UI already failed)');
     }catch(error){
      // No approved contract yet for this semantic id — section 23's
@@ -266,7 +269,7 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
     const trace=Buffer.from(JSON.stringify({format:'lawcus-redacted-execution-trace-v1',scenario,expected:liveDescriptions[scenario].expected,status,events,loginRequests,loginStatus,blockedCategories:[...blocked],networkPolicy:'HTTPS pinned public IPs; staging/API/read-only CDN only',limitations:'No raw DOM, cookie, credential, response body or native Playwright trace is included.'},null,2));
     const name=`${randomUUID()}.json.enc`;writeFileSync(join(artifactDirectory,name),await sealEvidence(trace),{mode:0o600});artifacts.push(['trace',name]);trace.fill(0);
     if(!page)throw new Error('No screenshot captured.');
-   }catch{if(status==='passed'){failed++;status='failed';actual='The check could not save its required encrypted evidence. It is not counted as passed.';}}
+   }catch{evidenceProblem=true;if(status==='passed'){failed++;status='failed';actual='The check could not save its required encrypted evidence. It is not counted as passed.';classification=EVIDENCE_SAVE_FAILED;}}
    // Only the per-scenario context closes here now — the browser process
    // is shared across the whole run (see the launch() call before this
    // loop) and closes once, in this function's own outer finally below.
@@ -278,16 +281,17 @@ export async function runLive({db,audit,runId,artifactDirectory,apiContracts,net
    // has thrown on every real 'lawcus' run since. Named columns, leaving
    // the two TestBook-linkage columns NULL (nullable by design — this path
    // doesn't run DSL-defined cases the way runner.mjs's executeRun() does).
-   db.prepare('INSERT INTO scenario_results(id,run_id,scenario,title,status,expected,actual,duration_ms,healed) VALUES(?,?,?,?,?,?,?,?,?)').run(id,runId,scenario,liveDescriptions[scenario].title,status,liveDescriptions[scenario].expected,actual,Date.now()-started,healed?1:0);
+   db.prepare('INSERT INTO scenario_results(id,run_id,scenario,title,status,expected,actual,duration_ms,healed,failure_class,reason_code,evidence_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(id,runId,scenario,liveDescriptions[scenario].title,status,liveDescriptions[scenario].expected,actual,Date.now()-started,healed?1:0,classification?.failureClass??null,classification?.reasonCode??null,evidenceProblem?'save_failed':(artifacts.some(a=>a[0]==='screenshot')?'saved':'none_captured'));
    for(const [kind,name] of artifacts)db.prepare('INSERT INTO artifacts VALUES(?,?,?,?,?,?)').run(randomUUID(),runId,id,kind,name,now());
    if(pendingObservation)networkObservations.record({runId,scenarioResultId:id,stepLabel:scenario,...pendingObservation});
    if(observer?.consoleEntries.length)networkObservations.recordConsoleEntries({runId,scenarioResultId:id,entries:observer.consoleEntries});
   }
   if(!failed&&path&&(!old||JSON.stringify(path)!==JSON.stringify(old))){const id=randomUUID();const version=(db.prepare('SELECT MAX(version) v FROM execution_paths WHERE runbook_id=?').get(book.id).v||0)+1;db.prepare('INSERT INTO execution_paths VALUES(?,?,?,?,?)').run(id,book.id,version,JSON.stringify(path),now());audit('path.saved',id,{version,environment:book.environment_id});}
-  db.prepare('UPDATE runs SET status=?,finished_at=?,summary=? WHERE id=?').run(failed?'failed':'passed',now(),`${plan.scenarios.length} staging checks completed. ${plan.scenarios.length-failed} passed; ${failed} need review. ${run.replay?'Saved semantic path replayed.':'First staging execution.'} Zero model calls during browser execution. Evidence is encrypted locally.`,runId);
+  const evidenceLost=db.prepare("SELECT COUNT(*) n FROM scenario_results WHERE run_id=? AND evidence_status='save_failed'").get(runId).n;
+  finalizeFromSavedResults(db,runId,{planned:plan.scenarios.length,extraSummary:`${run.replay?'Saved semantic path replayed.':'First staging execution.'} Zero model calls during browser execution.${evidenceLost?` Evidence for ${evidenceLost} check(s) could not be saved.`:' Evidence is encrypted locally.'}`});
   audit('run.completed',runId,{environment:book.environment_id,failed,checks:plan.scenarios.length});
- }catch{
-  db.prepare("UPDATE runs SET status='interrupted',finished_at=?,summary=? WHERE id=?").run(now(),'The staging run could not start or complete. Check the local runner, macOS Keychain permission and network connection. No pass is claimed.',runId);audit('run.interrupted',runId,{environment:book.environment_id});
+ }catch(error){
+  finalizeRun(db,runId,{planned:plan.scenarios.length,error});audit('run.interrupted',runId,{environment:book.environment_id,reasonCode:classifyThrown(error).reasonCode});
  }finally{await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});}
 }
 
