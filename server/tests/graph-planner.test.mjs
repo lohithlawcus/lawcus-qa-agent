@@ -191,6 +191,38 @@ test("a check that provisions its own prerequisite, or declares an existing fixt
   });
 });
 
+test("a check that declares it needs no setup is not blocked by a prerequisite; a check that declares nothing still is", () => {
+  withApp((app) => {
+    addCases(app.testbook, "Contacts", ["contacts.a"]);
+    addCases(app.testbook, "Matters", ["matters.empty_form", "matters.undeclared"]);
+    approveEdge(app.knowledge, "DEPENDS_ON", "Matters", "Contacts");
+    const p = plan(app, "Verify Matters", { caseSetup: { "matters.empty_form": { needsNoSetup: true } } });
+    const byId = Object.fromEntries(p.cells.map((c) => [c.externalId, c]));
+    assert.deepEqual(byId["matters.empty_form"].prerequisites, [{ prerequisite: "Contacts", mode: "not_needed" }]);
+    assert.equal(byId["matters.empty_form"].covered, true);
+    assert.equal(byId["matters.undeclared"].blockedReason, "prerequisite_unmet", "declaring nothing is still unmet");
+    assert.equal(p.status, "blocked");
+    // `needsNoSetup` must be exactly true; anything else does not excuse a prerequisite
+    assert.equal(plan(app, "Verify Matters", { caseSetup: { "matters.empty_form": { needsNoSetup: "yes" } } }).cells.find((c) => c.externalId === "matters.empty_form").blockedReason, "prerequisite_unmet");
+  });
+});
+
+test("with the real case declarations, 'Verify Matters' is ready once Matters DEPENDS_ON Contacts is approved", () => {
+  withApp((app) => {
+    app.testbook.syncCases({ featureName: "Authentication", featureDescription: "d", suiteName: "login-essentials", suiteDescription: "d", priority: "normal", entries: loginTestCases });
+    seedLawcusNativeCases(app.testbook);
+    seedLawcusKnowledge(app.knowledge);
+    const pending = app.knowledge.inboxEdges().find((e) => e.from_feature === "Matters" && e.to_feature === "Contacts");
+    app.knowledge.approveEdge(pending.id, HUMAN);
+    const p = planFromKnowledge({ intent: "Verify Matters", knowledge: app.knowledge, testbook: app.testbook });
+    assert.equal(p.status, "ready", JSON.stringify(p.blockers));
+    assert.deepEqual(p.cells.map((c) => [c.externalId, c.covered]).sort(), [["matters.create_for_new_contact", true], ["matters.create_mandatory_field_validation", true]]);
+    assert.deepEqual(Object.fromEntries(p.cells.map((c) => [c.externalId, c.prerequisites[0].mode])), {
+      "matters.create_for_new_contact": "self_provisioned", "matters.create_mandatory_field_validation": "not_needed",
+    });
+  });
+});
+
 test("prerequisite features are ordered first; quarantined checks are listed but do not run", () => {
   withApp((app) => {
     addCases(app.testbook, "Contacts", ["contacts.a", "contacts.broken"], { quarantine: ["contacts.broken"] });

@@ -99,6 +99,20 @@ export function openChangeSignals(db, audit, { knowledge, testbook }) {
       const resolved = knowledge.resolveSemanticId(match);
       if (resolved) citedIds.add(resolved.semantic_id);
     }
+    // Ids that predate the naming convention (lowercase, dotted) are not caught by
+    // the pattern above, so look for every id we actually know, own or alias. The
+    // boundaries stop a longer id from matching a shorter one and let a full stop
+    // end a sentence.
+    const knownIds = [
+      ...approvedGroups.flatMap((group) => group.items.map((item) => item.semantic_id)),
+      ...db.prepare("SELECT alias_semantic_id FROM knowledge_item_aliases").all().map((row) => row.alias_semantic_id),
+    ];
+    for (const id of knownIds) {
+      if (new RegExp(`(?<![A-Za-z0-9_.-])${escapeRegExp(id)}(?![A-Za-z0-9_-])`, "i").test(text)) {
+        const resolved = knowledge.resolveSemanticId(id);
+        if (resolved) citedIds.add(resolved.semantic_id);
+      }
+    }
 
     const affectedFacts = new Map();
     const consider = (item, feature, basis, strength, extra = {}) => {

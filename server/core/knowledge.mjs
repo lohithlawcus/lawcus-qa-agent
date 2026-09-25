@@ -255,7 +255,10 @@ export function openKnowledge(db, audit) {
     apiContracts = [],
     relatedTests = [],
   }) {
-    validateSemanticId(type, semanticId);
+    // The naming convention applies to NEW ids only. A fact that already exists
+    // (or is an alias of one) keeps working under the id it has, even if it
+    // predates the convention, so it can still be revised.
+    if (!resolveSemanticId(semanticId)) validateSemanticId(type, semanticId);
     const scopeJson = validateScope(scope);
     const requestedSemanticId = semanticId;
     const feature = ensureFeature(featureName, featureDescription);

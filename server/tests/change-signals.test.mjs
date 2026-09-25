@@ -286,3 +286,30 @@ test("the migration is recorded and the HTTP routes are wired to a human actor",
   assert.match(index, /changeSignals\.resolveFlag\(\{ flagId: hit\[1\], \.\.\.input, actor: approverIdentity \}\)/);
   assert.match(index, /changeSignals\.dismiss\(\{ signalId: hit\[1\], \.\.\.input, actor: approverIdentity \}\)/);
 });
+
+test("a signal can propose a revision to a real approved fact that still has an older, dotted id", () => {
+  withApp((app) => {
+    const { emailRule } = seed(app);
+    app.db.prepare("UPDATE knowledge_items SET semantic_id='contacts.person-or-company' WHERE id=?").run(emailRule.id);
+    const signal = submit(app.signals, { title: "Change", body: "contacts.person-or-company now also allows a Trust type." });
+    const analysis = app.signals.analyze(signal.id).analysis;
+    assert.equal(analysis.affectedFacts[0].semanticId, "contacts.person-or-company", "the older id is recognised in the text");
+    const result = app.signals.proposeRevision({ signalId: signal.id, semanticId: "contacts.person-or-company", statement: "A contact is a Person, a Company or a Trust.", proposedBy: HUMAN });
+    assert.equal(result.item.status, "pending_review");
+    assert.equal(result.item.semanticId, "contacts.person-or-company");
+    assert.equal(result.before, emailRule.statement);
+  });
+});
+
+test("citing an older dotted id is recognised exactly: a longer id does not match a shorter one, and a full stop ends a sentence", () => {
+  withApp((app) => {
+    const { emailRule, phoneRule } = seed(app);
+    app.db.prepare("UPDATE knowledge_items SET semantic_id='contacts.person-or-company' WHERE id=?").run(emailRule.id);
+    app.db.prepare("UPDATE knowledge_items SET semantic_id='contacts.person-or-company-extra' WHERE id=?").run(phoneRule.id);
+    const cited = (body) => app.signals.analyze(submit(app.signals, { title: `t ${body}`, body }).id).analysis.affectedFacts.filter((f) => f.basis === "cited").map((f) => f.semanticId);
+    assert.deepEqual(cited("See contacts.person-or-company."), ["contacts.person-or-company"], "sentence-final full stop");
+    assert.deepEqual(cited("Only the longer one: contacts.person-or-company-extra changed"), ["contacts.person-or-company-extra"]);
+    assert.deepEqual(cited("Changed CONTACTS.PERSON-OR-COMPANY today"), ["contacts.person-or-company"], "case does not matter");
+    assert.deepEqual(cited("xcontacts.person-or-company or contacts.person-or-companyx"), [], "no match inside a longer word");
+  });
+});

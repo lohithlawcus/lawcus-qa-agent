@@ -1108,3 +1108,10 @@ footer {
     gap: 5px;
   }
 }
+
+/* Facts, product changes and plan notices */
+.list-row.selected { outline: 2px solid var(--accent, #2563eb); outline-offset: -2px; border-radius: 8px; }
+.link-button { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
+.plan-notices { display: grid; gap: 10px; margin: 12px 0; }
+.plan-notices .notice ul { margin: 6px 0 0 18px; }
+.fact-review, .change-signals { display: grid; gap: 16px; }

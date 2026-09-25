@@ -126,3 +126,41 @@ From: A
   assert.ok(errors.some((e) => /missing "To:"/.test(e.message)));
   assert.ok(errors.some((e) => /missing "Rationale:"/.test(e.message)));
 });
+
+// ---------- every fact needs a source (KB-03) ----------
+
+const ITEM_WITHOUT_SOURCE = `## Feature: Billing
+Description: Invoicing.
+
+### BUSINESS_RULE: BR-BILLING-SRC-001
+Title: A rule
+Provenance: DOCUMENTED
+Statement: A rule with nothing supporting it.
+`;
+
+test("an item with no Source Title is a line error, and nothing is returned for it", () => {
+  const { items, errors } = parseKnowledgeMarkdown(ITEM_WITHOUT_SOURCE);
+  assert.equal(items.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /"BR-BILLING-SRC-001": missing "Source Title:"/);
+  assert.ok(errors[0].line > 0);
+  assert.equal(parseKnowledgeMarkdown(`${ITEM_WITHOUT_SOURCE}Source Title: Release notes\n`).errors.length, 0);
+});
+
+test("a relationship may still omit its source (only facts need one)", () => {
+  const text = `## Feature: A\nDescription: d\n\n## Feature: B\nDescription: d\n\n### EDGE: DEPENDS_ON\nFrom: A\nTo: B\nRationale: r\n`;
+  assert.equal(parseKnowledgeMarkdown(text).errors.length, 0);
+});
+
+test("the shipped import template and the UI's example text both parse cleanly, so they cannot go stale", async () => {
+  const { readFileSync } = await import("node:fs");
+  const template = readFileSync(new URL("../knowledge/IMPORT_TEMPLATE.md", import.meta.url), "utf8");
+  const body = template.slice(template.indexOf("---\n") + 4);
+  const fromTemplate = parseKnowledgeMarkdown(body);
+  assert.deepEqual(fromTemplate.errors.filter((e) => /Source Title/.test(e.message)), []);
+  const page = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
+  const example = page.match(/const EXAMPLE_KNOWLEDGE_TEXT = `([\s\S]*?)`;/)[1];
+  const fromUi = parseKnowledgeMarkdown(example);
+  assert.deepEqual(fromUi.errors, []);
+  assert.ok(fromUi.items.length >= 1 && fromUi.items.every((item) => item.source?.title));
+});
