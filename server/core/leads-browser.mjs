@@ -1,5 +1,5 @@
 import { attachNetworkObserver, correlateObservation } from "./network-observer.mjs";
-import { attachEvidence } from "./evidence.mjs";
+import { attachEvidence, captureScreenshot } from "./evidence.mjs";
 import { STAGING, API_ORIGIN } from "./environment-adapter.mjs";
 
 // V5 Step 15 — Leads, browser-driven (same "option 2" direction as
@@ -119,12 +119,12 @@ export async function createLeadViaBrowser({ context, apiContracts, firstName, l
     // not only updates).
     const match = page.url().match(/\/lead\/([a-f0-9-]{36})/);
     if (!match) throw new Error(`Could not determine the created lead's uuid from the post-save URL: ${page.url()}`);
-    return { uuid: match[1], correlation, events: observer.events, screenshot: await page.screenshot({ fullPage: false }).catch(() => null) };
+    return { uuid: match[1], correlation, events: observer.events, screenshot: await captureScreenshot(page) };
   } catch (error) {
     // Same pattern as contacts-browser.mjs's createContactViaBrowser:
     // attach evidence to the thrown error (via the private WeakMap channel in evidence.mjs, never an own property that a logger could serialize) rather than changing this
     // function's throw-on-failure contract for every existing caller.
-    attachEvidence(error, { screenshot: await page.screenshot({ fullPage: false }).catch(() => null) });
+    attachEvidence(error, { screenshot: await captureScreenshot(page) });
     throw error;
   } finally {
     observer.dispose();
@@ -174,7 +174,7 @@ export async function readLeadCustomFieldViaBrowser({ context, uuid, fieldName }
     await openEditMatterCustomFields(page);
     await ensureFieldOnForm(page, fieldName);
     const value = await fieldValueInput(page, fieldName).inputValue();
-    const screenshot = await page.screenshot({ fullPage: false }).catch(() => null);
+    const screenshot = await captureScreenshot(page);
     return { value, screenshot };
   } finally {
     await page.close().catch(() => {});

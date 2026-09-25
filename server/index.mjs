@@ -52,6 +52,7 @@ import { openMutationJournal } from "./core/mutation-journal.mjs";
 import { createCleanupRunner } from "./core/cleanup.mjs";
 import { finalizeRun } from "./core/run-outcome.mjs";
 import { closeOutCleanup } from "./core/run-cleanup.mjs";
+import { sanitizeErrorBody, safeErrorMessage } from "./core/redact.mjs";
 import { checkStagingBudget } from "./core/run-admission.mjs";
 import { currentCodeRevision } from "./core/code-revision.mjs";
 import { startFixture } from "./fixture.mjs";
@@ -189,7 +190,9 @@ const REAL_LOGIN_ENVIRONMENTS = new Set(Object.keys(ENVIRONMENT_ACCOUNTS));
 const limits = new Map();
 function json(res, status, data) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(data));
+  // An error body can carry text derived from a browser, a request or a
+  // thrown error; mask credentials before it leaves the process.
+  res.end(JSON.stringify(status >= 400 ? sanitizeErrorBody(data) : data));
 }
 let browserStatus={ready:false,message:"Check the browser in Environment before a live run."};
 let checkingBrowser=false;
@@ -414,7 +417,7 @@ const server = createServer(
           activeAuthoringSessions.set(session.id,handle);
           json(res,202,session);
         }catch(error){
-          authoringSessions.fail(session.id,error instanceof Error?error.message:'Could not open the authoring browser.');
+          authoringSessions.fail(session.id,error instanceof Error?safeErrorMessage(error):'Could not open the authoring browser.');
           json(res,400,{error:error instanceof Error&&error.message.length<300?error.message:'Could not open the authoring browser.'});
         }
         return;
@@ -468,7 +471,7 @@ const server = createServer(
         const proposalErrors=[];
         for(const spec of specs){
           try{proposalIds.push(proposals.create({...spec,generatedBy:'recorder'}));}
-          catch(error){proposalErrors.push(error instanceof Error?error.message:'Could not create a proposal.');}
+          catch(error){proposalErrors.push(error instanceof Error?safeErrorMessage(error):'Could not create a proposal.');}
         }
         const completed=authoringSessions.complete(id,{proposalIds});
         json(res,200,{...completed,proposalIds,proposalErrors,actionCount:normalized.length});

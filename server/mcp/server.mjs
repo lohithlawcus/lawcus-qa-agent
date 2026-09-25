@@ -14,7 +14,7 @@ import { openResourceLocks } from "../core/resource-locks.mjs";
 import { createCleanupRunner } from "../core/cleanup.mjs";
 import { PROTECTED_RESOURCE_IDS } from "../testbook/lawcus-native-cases.mjs";
 import * as tools from "./tools.mjs";
-import { McpToolError } from "./tools.mjs";
+import { textResult, errorResult } from "./results.mjs";
 
 // V5 Step 18 / master spec section 41 — Safe Lawcus QA MCP entrypoint.
 // A genuinely separate process from server/index.mjs (the real "Core"),
@@ -58,17 +58,6 @@ const ctx = {
 
 const server = new McpServer({ name: "lawcus-qa", version: "1.0.0" });
 
-function textResult(value) {
-  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
-}
-function errorResult(error) {
-  if (error instanceof McpToolError)
-    return { content: [{ type: "text", text: JSON.stringify({ error: error.code, message: error.message }) }], isError: true };
-  // An unexpected error is reported, never silently swallowed — but its
-  // raw message is still surfaced (not a stack trace, not secrets: no
-  // tool handler here ever touches a secret in the first place).
-  return { content: [{ type: "text", text: JSON.stringify({ error: "internal_error", message: error.message }) }], isError: true };
-}
 function register(name, description, inputSchema, handler) {
   server.registerTool(name, { description, inputSchema }, async (args) => {
     try {

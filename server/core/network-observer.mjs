@@ -1,4 +1,5 @@
 import { validateShape, validateResponseAgainstContract } from "./schema-shape.mjs";
+import { redactText } from "./redact.mjs";
 import { summarizeBody } from "./sanitize.mjs";
 
 // V5 Step 11 / section 23 — Browser Network Contract Observer.
@@ -85,7 +86,9 @@ export function attachNetworkObserver(context) {
     if (message.type() !== "error" || consoleEntries.length >= MAX_CONSOLE_ENTRIES) return;
     consoleEntries.push({
       level: "console-error",
-      message: String(message.text()).slice(0, MAX_MESSAGE_LENGTH),
+      // Page console output can quote URLs and values (tokens in a failed
+      // fetch, an echoed field); mask before it is kept or stored.
+      message: redactText(String(message.text())).slice(0, MAX_MESSAGE_LENGTH),
       observedAt: Date.now(),
     });
   };
@@ -93,7 +96,7 @@ export function attachNetworkObserver(context) {
     if (consoleEntries.length >= MAX_CONSOLE_ENTRIES) return;
     consoleEntries.push({
       level: "page-error",
-      message: String(webError.error()?.message || webError.error() || "Unknown page error").slice(0, MAX_MESSAGE_LENGTH),
+      message: redactText(String(webError.error()?.message || webError.error() || "Unknown page error")).slice(0, MAX_MESSAGE_LENGTH),
       observedAt: Date.now(),
     });
   };

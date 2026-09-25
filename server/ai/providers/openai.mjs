@@ -1,5 +1,6 @@
 import { readSecret } from "../../core/secrets.mjs";
 import { AIPlan, ALLOWED_SCENARIOS } from "../schemas/login-plan.mjs";
+import { containsSecret } from "../../core/redact.mjs";
 
 // V5 Step 8 / section 33 — one concrete AIProvider. Every provider module
 // exposes named task methods matching a policy's task name (see
@@ -17,7 +18,10 @@ export function createOpenAIProvider({ getSecret = readSecret, request = fetch }
       if (
         /sk-[a-z0-9_-]{15,}|password\s*[:=]|secret\s*[:=]|token\s*[:=]/i.test(
           intent,
-        )
+        ) ||
+        // Also anything the shared redactor recognizes — including the real
+        // QA password typed with no label around it.
+        containsSecret(intent)
       )
         throw new Error(
           "Remove credentials from the test instruction. Enter them only in secure setup.",

@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, readFileSync, chmodSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { redactValue } from "./redact.mjs";
 export const now = () => new Date().toISOString();
 export function openStore(directory) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -253,7 +254,9 @@ export function openStore(directory) {
         "local-operator",
         action,
         entityId,
-        JSON.stringify(details),
+        // Audit details are built by code that already avoids values, but this
+        // is the one place every event passes through — mask anyway.
+        JSON.stringify(redactValue(details)),
         now(),
       );
   for (const row of stale) audit("run.interrupted", row.id);

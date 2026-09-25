@@ -1,5 +1,5 @@
 import { attachNetworkObserver, correlateObservation } from "./network-observer.mjs";
-import { attachEvidence } from "./evidence.mjs";
+import { attachEvidence, captureScreenshot } from "./evidence.mjs";
 import { STAGING, API_ORIGIN } from "./environment-adapter.mjs";
 import { deflateSync, crc32 } from "node:zlib";
 
@@ -243,7 +243,7 @@ export async function createContactViaBrowser({ context, apiContracts, firstName
     // not only updates).
     const match = page.url().match(/\/contact\/([a-f0-9-]{36})/);
     if (!match) throw new Error(`Could not determine the created contact's uuid from the post-save URL: ${page.url()}`);
-    return { uuid: match[1], correlation, events: observer.events, screenshot: await page.screenshot({ fullPage: false }).catch(() => null) };
+    return { uuid: match[1], correlation, events: observer.events, screenshot: await captureScreenshot(page) };
   } catch (error) {
     // Attaches evidence to the thrown error via the private WeakMap channel
     // (evidence.mjs — never an own property that a logger could serialize)
@@ -252,7 +252,7 @@ export async function createContactViaBrowser({ context, apiContracts, firstName
     // still gets the same thrown Error it always did, and a caller that
     // knows to look (executeImpactedTest) can read error.screenshot for
     // "why did this fail" without every other caller needing to change.
-    attachEvidence(error, { screenshot: await page.screenshot({ fullPage: false }).catch(() => null) });
+    attachEvidence(error, { screenshot: await captureScreenshot(page) });
     throw error;
   } finally {
     observer.dispose();
@@ -822,7 +822,7 @@ export async function readContactCustomFieldViaBrowser({ context, uuid, fieldNam
     await openEditCustomFields(page);
     await ensureFieldOnForm(page, fieldName);
     const value = await customFieldValueInput(page, fieldName).inputValue();
-    const screenshot = await page.screenshot({ fullPage: false }).catch(() => null);
+    const screenshot = await captureScreenshot(page);
     return { value, screenshot };
   } finally {
     await page.close().catch(() => {});
