@@ -82,6 +82,15 @@ export function validateScope(scope) {
   return Object.keys(out).length ? JSON.stringify(out) : null;
 }
 
+/** A scope in one comparable form (keys and names sorted), or null. Two facts
+ * with the same words but a different scope are different facts; the same scope
+ * written in a different order is the same scope. */
+export function canonicalScope(scope) {
+  const value = typeof scope === "string" ? JSON.parse(scope) : scope;
+  if (!value || typeof value !== "object" || !Object.keys(value).length) return null;
+  return JSON.stringify(Object.fromEntries(Object.keys(value).sort().map((key) => [key, [...new Set(value[key])].sort()])));
+}
+
 /** Does this fact apply in this context ({ roles, configurations, tenants,
  * environments } — each a name or a list)? An unscoped fact applies
  * everywhere. A scoped fact applies only when the context names a value it
@@ -225,7 +234,7 @@ export function openKnowledge(db, audit) {
     ).get(semanticId) ?? null;
   }
 
-  function findDuplicate(featureId, statement, exceptSemanticId) {
+  function findDuplicate(featureId, statement, exceptSemanticId, scopeJson = null) {
     const wanted = normalizeStatement(statement);
     const candidates = db
       .prepare(
@@ -233,7 +242,9 @@ export function openKnowledge(db, audit) {
          ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'pending_review' THEN 1 ELSE 2 END, created_at`,
       )
       .all(featureId, exceptSemanticId, ...ACTIVE_STATUSES);
-    return candidates.find((row) => normalizeStatement(row.statement) === wanted) ?? null;
+    // The same words for a different scope are a different fact, not a duplicate.
+    const wantedScope = canonicalScope(scopeJson);
+    return candidates.find((row) => normalizeStatement(row.statement) === wanted && canonicalScope(row.scope) === wantedScope) ?? null;
   }
 
   function proposeItem({
@@ -272,13 +283,13 @@ export function openKnowledge(db, audit) {
     const latest = target
       ? db.prepare("SELECT * FROM knowledge_items WHERE semantic_id=? ORDER BY version DESC LIMIT 1").get(target.semantic_id)
       : null;
-    if (latest && normalizeStatement(latest.statement) === normalizeStatement(statement)) {
+    if (latest && normalizeStatement(latest.statement) === normalizeStatement(statement) && canonicalScope(latest.scope) === canonicalScope(scopeJson)) {
       for (const apiSemanticId of apiContracts) linkApiContract(latest.id, apiSemanticId);
       for (const externalId of relatedTests) linkTest(latest.id, externalId);
       return latest;
     }
     // The same statement under a different label is the same fact.
-    const duplicate = findDuplicate(feature.id, statement, semanticId);
+    const duplicate = findDuplicate(feature.id, statement, semanticId, scopeJson);
     if (duplicate) {
       recordAlias(requestedSemanticId, duplicate, "proposed again under a different ID with the same statement");
       for (const apiSemanticId of apiContracts) linkApiContract(duplicate.id, apiSemanticId);
@@ -342,7 +353,7 @@ export function openKnowledge(db, audit) {
       .all(...ACTIVE_STATUSES);
     const groups = new Map();
     for (const row of rows) {
-      const key = `${row.feature_id}|${normalizeStatement(row.statement)}`;
+      const key = `${row.feature_id}|${normalizeStatement(row.statement)}|${canonicalScope(row.scope) ?? ""}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(row);
     }
@@ -496,6 +507,7 @@ export function openKnowledge(db, audit) {
       applies_to: row.applies_to ? JSON.parse(row.applies_to) : null,
       preconditions: row.preconditions ? JSON.parse(row.preconditions) : null,
       expected_behavior: row.expected_behavior ? JSON.parse(row.expected_behavior) : null,
+      scope: row.scope ? JSON.parse(row.scope) : null,
       api_contracts: links.apiContracts,
       related_tests: links.relatedTests,
     };

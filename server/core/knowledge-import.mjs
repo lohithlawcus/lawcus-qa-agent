@@ -1,4 +1,4 @@
-import { TYPE_PREFIXES, PROVENANCE_VALUES, validateSemanticId, KnowledgeError } from "./knowledge.mjs";
+import { TYPE_PREFIXES, PROVENANCE_VALUES, validateSemanticId, validateScope, KnowledgeError } from "./knowledge.mjs";
 
 // V5 "efficiently update our knowledge base" (2026-09-18) — a plain-text
 // bulk-authoring format for knowledge.mjs's existing proposeItem/proposeEdge,
@@ -21,6 +21,9 @@ import { TYPE_PREFIXES, PROVENANCE_VALUES, validateSemanticId, KnowledgeError } 
 //   Statement: <the one atomic fact, one line>
 //   Does Not Mean: <optional>
 //   Applies To: <optional, comma-separated>
+//   Scope: <optional; only for a fact that holds for some roles / configurations /
+//          tenants / environments and not others, e.g. "roles=admin,owner; environments=lawcus".
+//          Leave the line out and the fact applies everywhere>
 //   Preconditions: <optional, comma-separated>
 //   Source Title: <REQUIRED: what supports this fact; a fact with no source is refused>
 //   Source URL: <optional>
@@ -49,7 +52,7 @@ const EDGE_TYPES = new Set([
 ]);
 
 const ITEM_KEYS = new Set([
-  "title", "provenance", "statement", "does not mean", "applies to", "preconditions",
+  "title", "provenance", "statement", "does not mean", "applies to", "scope", "preconditions",
   "source title", "source url", "related tests", "api contracts", "release",
   "effective from", "effective until",
 ]);
@@ -57,6 +60,29 @@ const EDGE_KEYS = new Set(["from", "to", "rationale", "source title", "source ur
 
 function splitList(value) {
   return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/** "roles=admin,owner; environments=lawcus" -> { roles: [...], environments: [...] },
+ * or an error message. The same strict rules as the API apply (validateScope), and
+ * a scope that names nothing is refused rather than read as "everywhere", because
+ * a writer who typed a Scope line meant to restrict the fact. */
+function parseScope(value) {
+  const groups = value.split(";").map((group) => group.trim()).filter(Boolean);
+  if (!groups.length) return { error: 'Scope: is empty. Write e.g. "roles=admin,owner; environments=lawcus", or leave the line out for a fact that applies everywhere.' };
+  const scope = {};
+  for (const group of groups) {
+    const match = /^([A-Za-z]+)\s*=\s*(.+)$/.exec(group);
+    if (!match) return { error: `Scope entries look like "roles=admin,owner", separated by semicolons (got "${group}").` };
+    const key = match[1].toLowerCase();
+    if (key in scope) return { error: `Scope names "${key}" more than once.` };
+    scope[key] = splitList(match[2]);
+  }
+  try {
+    validateScope(scope);
+  } catch (error) {
+    return { error: error instanceof KnowledgeError ? error.message : String(error) };
+  }
+  return { scope };
 }
 
 /** Parses the bulk-import Markdown into proposeItem()/proposeEdge()-ready
@@ -109,7 +135,19 @@ export function parseKnowledgeMarkdown(text) {
           message: `Feature "${currentFeature.name}" needs a "Description:" line the first time it's introduced.`,
         });
 
-      if (typeOk && provenanceOk && f.get("title") && f.get("statement") && f.get("source title") && currentFeature?.description) {
+      let scope = null;
+      let scopeOk = true;
+      if (f.has("scope")) {
+        const parsed = parseScope(f.get("scope"));
+        if (parsed.error) {
+          scopeOk = false;
+          errors.push({ line: current.scopeLine ?? lineNo, message: `"${semanticId}": ${parsed.error}` });
+        } else {
+          scope = parsed.scope;
+        }
+      }
+
+      if (typeOk && provenanceOk && scopeOk && f.get("title") && f.get("statement") && f.get("source title") && currentFeature?.description) {
         const sourceTitle = f.get("source title");
         items.push({
           semanticId,
@@ -122,6 +160,7 @@ export function parseKnowledgeMarkdown(text) {
           provenance,
           source: sourceTitle ? { title: sourceTitle, url: f.get("source url") || null, author: null } : null,
           appliesTo: f.has("applies to") ? splitList(f.get("applies to")) : null,
+          scope,
           preconditions: f.has("preconditions") ? splitList(f.get("preconditions")) : null,
           relatedTests: f.has("related tests") ? splitList(f.get("related tests")) : [],
           apiContracts: f.has("api contracts") ? splitList(f.get("api contracts")) : [],
@@ -186,7 +225,14 @@ export function parseKnowledgeMarkdown(text) {
     const kvMatch = /^([A-Za-z][A-Za-z ]*):\s*(.*)$/.exec(trimmed);
     const validKeys = current.kind === "item" ? ITEM_KEYS : EDGE_KEYS;
     if (kvMatch && validKeys.has(kvMatch[1].trim().toLowerCase())) {
-      current.fields.set(kvMatch[1].trim().toLowerCase(), kvMatch[2].trim());
+      const key = kvMatch[1].trim().toLowerCase();
+      // Two Scope lines could contradict each other, and the last would win silently.
+      if (key === "scope" && current.fields.has("scope")) {
+        errors.push({ line: lineNo, message: `"${current.semanticId}": "Scope:" appears more than once. Put every restriction on one line, separated by semicolons.` });
+        return;
+      }
+      current.fields.set(key, kvMatch[2].trim());
+      if (key === "scope") current.scopeLine = lineNo;
       return;
     }
     errors.push({
