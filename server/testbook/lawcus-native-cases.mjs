@@ -10,6 +10,8 @@ import {
   runLeadCustomFieldCheck,
   runLeadCreationCheck,
   runLeadMandatoryFieldValidationCheck,
+  runMatterCreationForNewContactCheck,
+  runMatterMandatoryFieldValidationCheck,
 } from "../core/live-runner.mjs";
 
 // V5 Step 16 — registers Step 15's already-built, already-live-verified
@@ -270,6 +272,45 @@ export const UPDATE_LEAD_CASES = {
 
 export const LEADS_NATIVE_CASES = { ...CREATE_LEAD_CASES, ...UPDATE_LEAD_CASES };
 
+// The Contact -> Matter slice (2026-09-26): the first check that spans two
+// modules. It creates its OWN Person contact, then a Matter for it, and proves
+// the link from both the network and the page. Both records are recorded as
+// owned (never deleted). Quarantined until it has passed live once.
+export const CREATE_MATTER_CASES = {
+  "matters.create_for_new_contact": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runMatterCreationForNewContactCheck",
+      description:
+        "Real browser-driven check spanning Contacts and Matters: creates a QA Person contact, then a Matter for it through the New Matter dialog (Client picker), correlates both creates against their approved contracts (lawcus.contacts.create, lawcus.matters.create), and verifies the matter is linked to that contact via GET /matters/:uuid and on the detail page.",
+    }),
+    definition: {
+      id: "matters.create_for_new_contact",
+      name: "Create a Matter for a new Contact and verify the client link",
+      layer: "both",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+  "matters.create_mandatory_field_validation": {
+    source: nativeSource({
+      kind: "native",
+      module: "server/core/live-runner.mjs",
+      function: "runMatterMandatoryFieldValidationCheck",
+      description:
+        "Real browser-driven check that submitting the New Matter dialog empty flags Client and Matter Name, sends no create request, and creates nothing. Observed against real staging on 2026-09-26.",
+    }),
+    definition: {
+      id: "matters.create_mandatory_field_validation",
+      name: "Required-field validation blocks an empty Matter",
+      layer: "ui",
+      risk: "normal",
+      status: "approved",
+    },
+  },
+};
+
 // Suite -> the externalIds it contains, for callers (Step 18's MCP
 // run_approved_suite tool) that need "everything in this suite" without
 // re-deriving it from testbook.tree() every time.
@@ -280,6 +321,7 @@ export const NATIVE_SUITE_MEMBERS = {
   "Update Contact - Company": Object.keys(UPDATE_CONTACT_COMPANY_CASES),
   "Create Lead - Person": Object.keys(CREATE_LEAD_CASES),
   "Update Lead": Object.keys(UPDATE_LEAD_CASES),
+  "Create Matter": Object.keys(CREATE_MATTER_CASES),
 };
 
 // Real, owned staging fixtures from Step 15's own live-verified work (see
@@ -335,10 +377,30 @@ function createOutcome(r, recordKind) {
   };
 }
 
+// A Matter check passes only if BOTH creates matched their contracts AND the
+// matter is really linked to the contact — on the wire and on the page.
+function matterOutcome(r) {
+  const contactOk = r.contact.correlation.contractMatch && r.contact.correlation.cardinalityOk;
+  const matterOk = r.matter.correlation.contractMatch && r.matter.correlation.cardinalityOk;
+  const passed = contactOk && matterOk && r.matter.clientLinked && r.matter.clientShownOnPage;
+  const problems = [
+    !contactOk && `the contact create did not match its contract${r.contact.correlation.mismatchReason ? ` (${r.contact.correlation.mismatchReason})` : ""}`,
+    !matterOk && `the matter create did not match its contract${r.matter.correlation.mismatchReason ? ` (${r.matter.correlation.mismatchReason})` : ""}`,
+    !r.matter.clientLinked && "Lawcus did not list the contact as the matter's client when the matter was re-read",
+    r.matter.clientLinked && !r.matter.clientShownOnPage && "the matter's detail page never showed the client's name",
+  ].filter(Boolean);
+  return {
+    passed,
+    actual: JSON.stringify({ contactUuid: r.contact.uuid, matterUuid: r.matter.uuid, contactContractMatch: contactOk, matterContractMatch: matterOk, clientLinked: r.matter.clientLinked, clientShownOnPage: r.matter.clientShownOnPage }),
+    screenshot: r.matter.screenshot,
+    reason: passed ? null : `The matter was created, but ${problems.join("; ")}.`,
+  };
+}
+
 // Save was clicked but the post-save URL never confirmed a record: the
 // server may or may not have created it. Recorded as a "may exist" leftover
 // (never as proof) so a partial creation is visible instead of vanishing.
-const UNCONFIRMED_CREATE = /Could not determine the created (contact|lead)'s uuid/;
+const UNCONFIRMED_CREATE = /Could not determine the created (contact|lead|matter)'s uuid/;
 
 /** Records what a check creates. Everything is recorded with cleanup policy
  * "manual": deleting records from a shared staging tenant has not been
@@ -397,6 +459,8 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId, resou
     runLeadCustomFieldCheck,
     runLeadCreationCheck,
     runLeadMandatoryFieldValidationCheck,
+    runMatterCreationForNewContactCheck,
+    runMatterMandatoryFieldValidationCheck,
     ...impl,
   };
   const own = ownershipTracker({ resourceOwnership, runId });
@@ -471,6 +535,24 @@ export function buildNativeRunners({ apiContracts, mutationJournal, runId, resou
       own.created("lead", r.uuid, "leads.create_new_verifies_custom_fields", `${name} — matter "${matterName}" (its linked contact/matter records are not tracked)`);
       return createOutcome(r, "lead");
     },
+    "matters.create_for_new_contact": async () => {
+      const marker = ts + 2;
+      const firstName = "QA Matter";
+      const lastName = String(marker);
+      const matterName = `QA Matter ${marker}`;
+      const label = `${firstName} ${lastName} (contact) / ${matterName} (matter)`;
+      const r = await own.track("matter", "matters.create_for_new_contact", label, () =>
+        fn.runMatterCreationForNewContactCheck({
+          apiContracts, firstName, lastName, matterName,
+          // Recorded the moment each record exists, so a later failure still leaves a visible leftover.
+          onCreated: (kind, uuid) => own.created(kind, uuid, "matters.create_for_new_contact", kind === "contact" ? `${firstName} ${lastName}` : matterName),
+        }));
+      return matterOutcome(r);
+    },
+    "matters.create_mandatory_field_validation": async () => {
+      const r = await fn.runMatterMandatoryFieldValidationCheck();
+      return { passed: r.messageCount === 2 && r.dialogStillOpen && r.noMatterCreated && r.stayedOnList, actual: JSON.stringify({ messageCount: r.messageCount, dialogStillOpen: r.dialogStillOpen, noMatterCreated: r.noMatterCreated }), screenshot: r.screenshot };
+    },
     "leads.create_mandatory_field_validation": async () => {
       const r = await fn.runLeadMandatoryFieldValidationCheck();
       return { passed: r.messageCount === 2 && r.stayedOnStep1 && r.noLeadCreated, actual: JSON.stringify(r) };
@@ -542,6 +624,14 @@ export function seedLawcusNativeCases(testbook) {
     suiteDescription: "Real, browser-driven checks of editing an existing Lead's matter-level custom fields.",
     priority: "normal",
     entries: UPDATE_LEAD_CASES,
+  });
+  testbook.syncCases({
+    featureName: "Matters",
+    featureDescription: "Legal matters (cases) in Lawcus, each linked to a client Contact.",
+    suiteName: "Create Matter",
+    suiteDescription: "Real, browser-driven checks of the New Matter dialog — including the first check that spans Contacts and Matters.",
+    priority: "normal",
+    entries: CREATE_MATTER_CASES,
   });
   for (const externalId of Object.values(NATIVE_SUITE_MEMBERS).flat()) {
     const reason = NATIVE_QUARANTINE[externalId];

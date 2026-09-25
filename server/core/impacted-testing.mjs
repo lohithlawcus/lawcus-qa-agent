@@ -48,12 +48,29 @@ const CONTACT_CUSTOM_FIELD_CELLS = [
   { featureName: "Leads", recordState: "new", externalId: "leads.create_new_verifies_custom_fields" },
 ];
 
+// The Contact -> Matter slice (2026-09-26): a second known request shape, so the
+// planner reaches a check that spans two modules. Deliberately as narrow as the
+// pattern above; widening it is a reviewable code change.
+const MATTER_FOR_CONTACT_INTENT =
+  /^(?:create|add) a(?: new)? matter for a(?: new)? contact(?:\s+and\s+(?:check|verify)\s+(?:that\s+)?(?:the\s+)?(?:client|contact)(?:\s+is)?\s+linked)?\.?$/i;
+
+const MATTER_FOR_CONTACT_CELLS = [
+  { featureName: "Matters", recordState: "new", externalId: "matters.create_for_new_contact" },
+  { featureName: "Matters", recordState: "new", externalId: "matters.create_mandatory_field_validation" },
+];
+
 const KNOWN_IMPACT_PATTERNS = [
   {
     id: "contact_custom_field_impacted",
     subjectFeatureName: "Contact Custom Fields",
     test: (normalized) => CONTACT_CUSTOM_FIELD_IMPACT_INTENT.test(normalized),
     cells: CONTACT_CUSTOM_FIELD_CELLS,
+  },
+  {
+    id: "matter_for_contact",
+    subjectFeatureName: "Matters",
+    test: (normalized) => MATTER_FOR_CONTACT_INTENT.test(normalized),
+    cells: MATTER_FOR_CONTACT_CELLS,
   },
 ];
 
