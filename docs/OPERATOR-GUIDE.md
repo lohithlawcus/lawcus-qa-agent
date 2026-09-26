@@ -29,7 +29,7 @@ It is one Mac, one dedicated test account, one run at a time. It is not complete
 | API Contracts | What a Lawcus request should look like. You approve each one. |
 | Personas | Extra test accounts, verified by a real sign-in. |
 | Teach / Record | Show the tool a workflow once; it becomes a proposal, never an automatic test. |
-| Safety & coverage | What the tool guards against and what it does not cover. |
+| Safety & coverage | Which checks count as coverage today and why the others do not, a quality baseline, and what the tool guards against. |
 | Environment | Accounts, the browser check, and the staging sweep. |
 
 ## Running a test

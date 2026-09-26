@@ -59,6 +59,7 @@ import { closeOutCleanup } from "./core/run-cleanup.mjs";
 import { sanitizeErrorBody, safeErrorMessage } from "./core/redact.mjs";
 import { checkStagingBudget, stagingBusy } from "./core/run-admission.mjs";
 import { runPreflight, preflightMessage } from "./core/preflight.mjs";
+import { buildCoverageReport } from "./core/coverage-report.mjs";
 import { currentCodeRevision } from "./core/code-revision.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
@@ -915,6 +916,11 @@ const server = createServer(
       // A read-only look at what this tool may have left in the staging tenant.
       // Reads the tenant's own list pages and keeps only records with this tool's
       // naming; a person decides what each candidate is. Changes nothing in staging.
+      // What the run history supports: which checks count as coverage, and a quality baseline. Read-only.
+      if (req.method === "GET" && pathname === "/coverage") {
+        json(res, 200, buildCoverageReport(db));
+        return;
+      }
       if (pathname === "/sweeps" || pathname.startsWith("/sweeps/")) {
         try {
           if (req.method === "GET" && pathname === "/sweeps") {

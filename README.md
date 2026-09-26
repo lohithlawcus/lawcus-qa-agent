@@ -20,6 +20,7 @@ A local tool that runs browser checks against the authorized Lawcus staging tena
 - **Runs checks.** A login suite (five checks) on a synthetic fixture and on the staging tenants, and native Contacts, Leads and Matters checks on Fiveriverz staging. Each check has a fresh browser context, a request policy, and encrypted evidence.
 - **Tells the truth about a run.** A run is `passed` only if every planned check ran and passed. Failed checks are classified (functional, infrastructure, automation, integrity, unclassified), and only a functional failure says Lawcus behaved wrongly.
 - **Tracks what it creates.** Records a check creates in staging are written down and reported. Nothing is ever deleted. A read-only sweep looks for QA-named records the tool does not know about.
+- **Says what counts as coverage.** From the run history: which checks passed recently on the main staging tenant, and why each other check does not count.
 - **Keeps Knowledge.** Facts with a source, scope, authority and history; a dependency graph; bulk import; a change loop for product changes. Nothing is trusted until a person approves it.
 - **Plans from Knowledge.** A request that names a feature is planned from approved facts and relations, with the reason for each check and what blocks the plan. Destructive requests are refused.
 - **Exposes an MCP server** (22 tools) that can read, plan, run approved checks and file proposals, but cannot approve, reject, flag, resolve, dismiss or delete anything.
