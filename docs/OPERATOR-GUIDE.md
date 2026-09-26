@@ -80,7 +80,7 @@ Some checks create records in Lawcus (a contact, a lead, a matter). The tool wri
 
 ## Teaching the tool a rule
 
-1. In **Knowledge**, paste rules into the import box (**Load example** shows the format; the full format is in `server/knowledge/IMPORT_TEMPLATE.md`). Every fact needs a **Source Title**. One mistake refuses the whole import and names the line.
+1. In **Knowledge**, paste rules into the import box (**Load example** shows the format; the full format is in `server/knowledge/IMPORT_TEMPLATE.md`). Every fact needs a **Source Title**. Add a `Scope:` line (for example `Scope: roles=owner,admin; environments=lawcus`) only for a fact that holds for some roles, configurations, tenants or environments; leave it out for a fact that applies everywhere. One mistake refuses the whole import and names the line.
 2. Imported facts wait as **pending review**. Read each one, add a note if you like, and **Approve** or **Reject**.
 3. If approving would replace a documented fact with weaker evidence (observed, inferred or assumed), the tool stops and asks you to write why. Only then can you approve anyway.
 4. In **Facts & changes → Facts**, open any fact to see who approved it, its source, where it applies, which tests assert it and its history.
