@@ -8,6 +8,7 @@ import { buildNativeRunners, NATIVE_SUITE_MEMBERS } from "../testbook/lawcus-nat
 import { finalizeRun } from "../core/run-outcome.mjs";
 import { closeOutCleanup } from "../core/run-cleanup.mjs";
 import { checkStagingBudget, stagingBusy } from "../core/run-admission.mjs";
+import { preflightMessage } from "../core/preflight.mjs";
 import { currentCodeRevision } from "../core/code-revision.mjs";
 
 // V5 Step 18 / master spec section 41 — Safe Lawcus QA MCP. Every function
@@ -147,6 +148,14 @@ function ensureWithinRunBudget(db) {
     throw new McpToolError(MCP_ERROR.RATE_LIMITED, `${budget.recent} staging runs were started in the last ${budget.windowMinutes} minutes (limit ${budget.limit}). Wait before starting another.`);
 }
 
+// `preflight` is supplied by the real MCP server; tests that stub the runners
+// leave it out. It runs before a staging sign-in is spent.
+async function ensurePreflight(preflight) {
+  if (!preflight) return;
+  const result = await preflight();
+  if (!result.ok) throw new McpToolError(MCP_ERROR.NOT_RUNNABLE, preflightMessage(result));
+}
+
 function ensureNoActiveRun(db) {
   if (stagingBusy(db))
     throw new McpToolError(MCP_ERROR.ALREADY_RUNNING, "A test is already running. Wait for it to finish before starting another.");
@@ -173,7 +182,7 @@ function createMcpRun(db, { title, intent, externalIds }) {
  * simulation). Refuses anything not already an approved case; never runs
  * an "unknown primitive" (this is exactly what execute_unknown_primitive
  * in the Never-expose list would be, so there is no path to it here). */
-export async function runApprovedTest({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit, resourceOwnership, cleanupRunner }, { externalId }) {
+export async function runApprovedTest({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit, resourceOwnership, cleanupRunner, preflight }, { externalId }) {
   const testCase = testbook.findCase(externalId);
   if (!testCase) throw new McpToolError(MCP_ERROR.NOT_FOUND, `No TestBook case with external_id "${externalId}".`);
   if (testCase.status !== "approved")
@@ -185,6 +194,7 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
     throw new McpToolError(MCP_ERROR.NOT_RUNNABLE, `"${externalId}" is not individually runnable via MCP yet (only Step 15's native Contact/Lead cases are) — try run_approved_suite for a DSL-defined suite like login-essentials instead.`);
   ensureNoActiveRun(db);
   ensureWithinRunBudget(db);
+  await ensurePreflight(preflight);
   const runId = createMcpRun(db, { title: `MCP: ${externalId}`, intent: `run_approved_test(${externalId})`, externalIds: [externalId] });
   // Re-bind now that the real runId exists, since mutation-journal entries
   // must reference it.
@@ -207,12 +217,13 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
 /** section 41's run_approved_suite — every native case in a known suite
  * (server/testbook/lawcus-native-cases.mjs's NATIVE_SUITE_MEMBERS), or the
  * standard fixed login-essentials plan for that one DSL suite. */
-export async function runApprovedSuite({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit, resourceOwnership, cleanupRunner }, { suiteName }) {
+export async function runApprovedSuite({ db, testbook, apiContracts, mutationJournal, artifactDirectory, audit, resourceOwnership, cleanupRunner, preflight }, { suiteName }) {
   const members = NATIVE_SUITE_MEMBERS[suiteName];
   if (!members)
     throw new McpToolError(MCP_ERROR.NOT_RUNNABLE, `"${suiteName}" is not a suite this MCP server can run yet. Known suites: ${Object.keys(NATIVE_SUITE_MEMBERS).join(", ")}.`);
   ensureNoActiveRun(db);
   ensureWithinRunBudget(db);
+  await ensurePreflight(preflight);
   const runId = createMcpRun(db, { title: `MCP suite: ${suiteName}`, intent: `run_approved_suite(${suiteName})`, externalIds: members });
   const runners = buildNativeRunners({ apiContracts, mutationJournal, runId, resourceOwnership });
   const plan = { cells: members.map((externalId) => {

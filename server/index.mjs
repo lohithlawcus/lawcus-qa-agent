@@ -58,6 +58,7 @@ import { finalizeRun } from "./core/run-outcome.mjs";
 import { closeOutCleanup } from "./core/run-cleanup.mjs";
 import { sanitizeErrorBody, safeErrorMessage } from "./core/redact.mjs";
 import { checkStagingBudget, stagingBusy } from "./core/run-admission.mjs";
+import { runPreflight, preflightMessage } from "./core/preflight.mjs";
 import { currentCodeRevision } from "./core/code-revision.mjs";
 import { startFixture } from "./fixture.mjs";
 const directory = resolve("work/runtime");
@@ -684,6 +685,7 @@ const server = createServer(
           const login=await keychain('exists',ENVIRONMENT_ACCOUNTS[book.environment_id]);if(!login.exists){json(res,409,{error:'Save your staging account in Environment first.'});return;}
           const budget=checkStagingBudget(db,book.environment_id);
           if(!budget.ok){json(res,429,{error:'Three staging runs were started in ten minutes. Please wait before more login attempts.'});return;}
+          const pre=await runPreflight({artifactDirectory});if(!pre.ok){json(res,409,{error:preflightMessage(pre),preflight:pre.checks});return;}
         }else{validateExecution(db.prepare('SELECT * FROM environments WHERE id=?').get(book.environment_id));}
         if (connecting() || savingCredentials || checkingBrowser || stagingBusy(db)) {
           json(res, 409, {
@@ -930,6 +932,8 @@ const server = createServer(
             }
             const sweepBudget = checkStagingBudget(db, "lawcus");
             if (!sweepBudget.ok) { json(res, 429, { error: "Three staging sign-ins were used in ten minutes. Please wait before sweeping." }); return; }
+            const sweepPre = await runPreflight({ artifactDirectory });
+            if (!sweepPre.ok) { json(res, 409, { error: preflightMessage(sweepPre), preflight: sweepPre.checks }); return; }
             const sweepId = stagingSweeps.begin({ environmentId: "lawcus", requestedBy: approverIdentity });
             void stagingSweeps.run({ sweepId, reader: ({ cutoff }) => runStagingSweepRead({ cutoff }) });
             json(res, 202, { sweepId });
@@ -1120,6 +1124,8 @@ const server = createServer(
         // from the one shared QA account.
         const impactedBudget = checkStagingBudget(db, "lawcus");
         if (!impactedBudget.ok) { json(res, 429, { error: "Three staging runs were started in ten minutes. Please wait before more login attempts." }); return; }
+        const impactedPre = await runPreflight({ artifactDirectory });
+        if (!impactedPre.ok) { json(res, 409, { error: preflightMessage(impactedPre), preflight: impactedPre.checks }); return; }
 
         const runbookId = randomUUID();
         db.prepare("INSERT INTO runbooks VALUES(?,?,?,?,?,?,?,?)").run(
