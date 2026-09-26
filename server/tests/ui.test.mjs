@@ -135,6 +135,33 @@ ui("approving an API contract says it is now trusted", async () => {
   await page.getByText(/Approved\. It is now part of the trusted/).waitFor();
 });
 
+ui("Personas: an unlabelled persona is refused, and a registered one waits for a visible sign-in", async () => {
+  await tab("Personas");
+  await page.getByText("No personas registered yet").waitFor();
+  await page.getByRole("button", { name: "Register", exact: true }).click();
+  await page.getByText("Give this persona a label.").waitFor();
+  await page.getByPlaceholder(/^Label, e\.g\./).fill("QA Admin");
+  await page.getByRole("button", { name: "Register", exact: true }).click();
+  await page.getByText("Persona registered. It stays unusable until verified by visible sign-in.").waitFor();
+  await page.getByText("QA Admin", { exact: true }).waitFor();
+  // Registering must not claim it can be used: it stays unverified until a person signs in.
+  assert.equal(await page.getByText(/session: /).count(), 0);
+  assert.equal(await page.getByText("No personas registered yet").count(), 0);
+});
+
+ui("Teach / Record: an empty description is refused, and no recording starts when the browser cannot open", async () => {
+  await tab("Teach / Record");
+  await page.getByText("No recordings yet").waitFor();
+  await page.getByRole("button", { name: "Start recording" }).click();
+  await page.getByText("Describe the feature and the workflow you'll perform.").waitFor();
+  await page.getByPlaceholder(/^Feature, e\.g\./).fill("Contacts");
+  await page.getByPlaceholder(/^Describe the workflow/).fill("Edit a contact's custom field and save");
+  await page.getByRole("button", { name: "Start recording" }).click();
+  // QA_FORBID_LIVE stops the browser from launching, so the screen must say so and must not pretend to record.
+  await page.getByText(/Live access \(.*\) is forbidden in this process/).first().waitFor();
+  assert.equal(await page.getByText("RECORDING IN PROGRESS").count(), 0);
+});
+
 ui("Sweep now refuses cleanly when the environment is not set up, and records nothing", async () => {
   await tab("Environment");
   await page.getByRole("button", { name: "Sweep now" }).click();
