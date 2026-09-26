@@ -33,14 +33,15 @@ test("each main doc states the date and a real commit it describes", () => {
   for (const [path, text] of Object.entries(docs)) {
     const match = /[Aa]s of (\d{1,2} [A-Z][a-z]+ \d{4}), commit `([0-9a-f]{7,40})`/.exec(text);
     assert.ok(match, `${path} has no "As of <date>, commit \`sha\`" line`);
-    let known = true;
     try {
+      // A shallow checkout (as in CI) does not hold older commits, so it cannot say the commit is missing.
+      const shallow = execFileSync("git", ["rev-parse", "--is-shallow-repository"], { cwd: root, encoding: "utf8" }).trim() === "true";
+      if (shallow) continue;
       execFileSync("git", ["cat-file", "-e", `${match[2]}^{commit}`], { cwd: root, stdio: "ignore" });
     } catch (error) {
-      if (error.code === "ENOENT") known = false; // no git in this environment
-      else assert.fail(`${path} names commit ${match[2]}, which is not in this repository`);
+      if (error.code === "ENOENT") continue; // no git in this environment
+      assert.fail(`${path} names commit ${match[2]}, which is not in this repository`);
     }
-    void known;
   }
 });
 
