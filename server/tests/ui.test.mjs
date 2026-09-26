@@ -21,7 +21,7 @@ async function waitFor(url, what, ms = 90000) {
     try { if ((await fetch(url)).status < 500) return; } catch { /* not up yet */ }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`${what} did not start.\n${logs.slice(-1500)}`);
+  throw new Error(`${what} did not start.\n${logs.slice(-3000)}`);
 }
 
 async function portFree(port) {
@@ -32,7 +32,7 @@ before(async () => {
   for (const port of [4319, 5173]) assert.ok(await portFree(port), `Port ${port} is in use: stop the running QA service or workspace before test:ui.`);
   scratch = mkdtempSync(join(tmpdir(), "qa-ui-"));
   service = spawn(process.execPath, [join(repo, "server/index.mjs")], { cwd: scratch, env });
-  app = spawn(process.execPath, [join(repo, "scripts/run-framework.mjs"), "dev", "--host", "127.0.0.1"], { cwd: repo, env });
+  app = spawn(process.execPath, [join(repo, "scripts/run-framework.mjs"), "dev", "--hostname", "127.0.0.1"], { cwd: repo, env });
   for (const child of [service, app]) for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => { logs += d; });
   await waitFor("http://127.0.0.1:4319/session", "The service");
   await waitFor(APP + "/", "The workspace");
