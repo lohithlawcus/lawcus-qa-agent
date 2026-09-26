@@ -21,7 +21,7 @@ Evidence comes from three places:
 | Change loop: record a product change, see the facts and checks it touches, propose a revision | Working (app and MCP). |
 | Coverage report: which checks count as coverage and why the others do not, plus a quality baseline (Safety & coverage tab) | Working. Read-only, from the run history. Checked on a copy of this Mac's history: 14 of 19 checks count. Its baseline cannot yet say what share of failures are about Lawcus, because every failure recorded so far predates failure classification. |
 | Read-only sweep of staging for QA records left behind | Working. Run once in a scratch copy. |
-| MCP server (22 tools) | Working. Exercised over stdio against a copy of the real database. |
+| MCP server (23 tools) | Working. Exercised over stdio against a copy of the real database. |
 | Cleanup of records in staging | **Not implemented.** Records are tracked and reported, never deleted. |
 
 ## What has run on real staging (this Mac's run history)
@@ -82,7 +82,7 @@ These were run against real staging on 26 September 2026 but written to a scratc
 ## Implemented, but never run against real staging
 
 - The login suite's rejected-account and skipped-check branches (unit-tested only).
-- The Knowledge, Product-change and Staging-sweep screens were checked in a browser against a copy of the real data, and `npm run test:ui` drives a few of their paths (a refused import, the example import, an approval, recording a product change, a refused sweep) against a throwaway backend. The Facts view, Personas, Teach / Record and API Contracts screens have no automated UI test.
+- The Knowledge, Product-change and Staging-sweep screens were checked in a browser against a copy of the real data, and `npm run test:ui` drives a few of their paths (a refused import, the example import, an approval, recording a product change, a refused sweep) against a throwaway backend. The Facts view, API Contracts (approving a contract) and the Safety & coverage panel are also covered. Personas and Teach / Record have no automated UI test.
 - The change loop's integrations (Jira, Figma, Git) do not exist. Changes are entered by hand.
 
 ## Known limits

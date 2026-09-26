@@ -258,7 +258,7 @@ const EXPECTED_TOOLS = [
   "search_lawcus_knowledge", "get_feature_rules", "find_affected_features", "find_relevant_test_suites", "read_test_case", "read_api_contract",
   "create_test_proposal", "create_failure_analysis_proposal", "list_pending_proposals", "run_approved_test", "run_approved_suite",
   "get_run_status", "get_run_results", "get_failure_evidence_summary",
-  "list_facts", "get_fact", "list_stale_facts", "plan_test_request", "list_change_signals", "get_change_signal", "submit_change_signal", "propose_fact_revision",
+  "list_facts", "get_fact", "list_stale_facts", "get_coverage_report", "plan_test_request", "list_change_signals", "get_change_signal", "submit_change_signal", "propose_fact_revision",
 ];
 // Verbs that mean "a person decides"; matched against whole name segments (so run_approved_test is fine).
 const FORBIDDEN = ["approve", "reject", "dismiss", "flag", "resolve", "collapse", "delete", "cleanup", "accept", "import", "scope"];
@@ -324,5 +324,19 @@ test("over the wire: a signal is recorded, masked, analyzed and read back; error
     assert.deepEqual([refused.matched, refused.status], [false, "not_planned"]);
     assert.equal(refused.reviewRequests[0].severity, "refused");
     assert.deepEqual(parse(await call("list_facts", {})), []);
+  });
+});
+
+test("over the wire: get_coverage_report answers on an empty database and refuses an unknown feature", async () => {
+  await withServer(async (client) => {
+    const call = (name, args) => client.callTool({ name, arguments: args });
+    const all = await call("get_coverage_report", {});
+    assert.ok(!all.isError, all.content[0].text);
+    const report = parse(all);
+    assert.equal(report.summary.coveredCases, 0);
+    assert.ok(report.states.covered && report.quality.note);
+    const unknown = await call("get_coverage_report", { feature: "No Such Feature" });
+    assert.equal(unknown.isError, true);
+    assert.match(unknown.content[0].text, /No checks are registered/);
   });
 });

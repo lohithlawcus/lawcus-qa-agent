@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { openStore } from "../core/store.mjs";
 import { openTestBook } from "../core/testbook.mjs";
 import { buildCoverageReport, COVERAGE_STATES } from "../core/coverage-report.mjs";
+import { getCoverageReport, McpToolError } from "../mcp/tools.mjs";
 
 process.env.QA_FORBID_LIVE = "1";
 const NOW = Date.parse("2026-09-26T12:00:00Z");
@@ -164,4 +165,21 @@ test("the report only reads: nothing in the database changes", () =>
     const before = count();
     buildCoverageReport(db, { nowMs: NOW });
     assert.deepEqual(count(), before);
+  }));
+
+test("the MCP tool limits the report to one feature, case-insensitively, and recomputes the summary", () =>
+  withDb(({ db, addCases, record, testbook }) => {
+    addCases(["m.contact"]);
+    testbook.syncCases({ featureName: "Leads", featureDescription: "d", suiteName: "ls", suiteDescription: "d", entries: { "m.lead": { source: JSON.stringify({ kind: "native", module: "m", function: "f" }), definition: { id: "m.lead", name: "m.lead", layer: "both", risk: "normal", status: "approved" } } } });
+    record("m.contact", { at: daysAgo(1) });
+    const whole = getCoverageReport({ db });
+    assert.equal(whole.summary.cases, 2);
+    const contacts = getCoverageReport({ db }, { feature: "contacts" });
+    assert.deepEqual(contacts.cases.map((c) => c.externalId), ["m.contact"]);
+    assert.equal(contacts.summary.cases, 1);
+    assert.equal(contacts.summary.coveredCases, 1);
+    const leads = getCoverageReport({ db }, { feature: "LEADS" });
+    assert.equal(leads.summary.coveredCases, 0);
+    assert.equal(leads.summary.byState.never_run_on_staging, 1);
+    assert.throws(() => getCoverageReport({ db }, { feature: "Nope" }), (e) => e instanceof McpToolError && e.code === "not_found");
   }));
