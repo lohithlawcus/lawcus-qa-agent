@@ -19,6 +19,7 @@ Evidence comes from three places:
 | AI-assisted planning of login checks | Implemented, but **no model call is recorded on this Mac** and the AI switch is currently OFF (turned off on 17 September). Standard plans need no AI. |
 | Knowledge: facts with sources, scope, authority, history; bulk import; duplicate handling | Working. Nothing is trusted until you approve it. |
 | Change loop: record a product change, see the facts and checks it touches, propose a revision | Working (app and MCP). |
+| Coverage report: which checks count as coverage and why the others do not, plus a quality baseline (Safety & coverage tab) | Working. Read-only, from the run history. Checked on a copy of this Mac's history: 14 of 19 checks count. Its baseline cannot yet say what share of failures are about Lawcus, because every failure recorded so far predates failure classification. |
 | Read-only sweep of staging for QA records left behind | Working. Run once in a scratch copy. |
 | MCP server (22 tools) | Working. Exercised over stdio against a copy of the real database. |
 | Cleanup of records in staging | **Not implemented.** Records are tracked and reported, never deleted. |

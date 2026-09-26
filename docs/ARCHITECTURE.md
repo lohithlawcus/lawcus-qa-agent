@@ -69,6 +69,12 @@ Knowledge is a set of human-approved facts. The AI and MCP can only propose.
 - **Planning** (`impacted-testing.mjs`, `graph-planner.mjs`): a request that matches a hand-written pattern runs that pattern; otherwise a request naming a feature is planned from approved Knowledge. A plan states why each check was chosen, what must be set up, and what blocks it. Destructive or non-testing requests are never planned, and a blocked plan is never run.
 - **Change loop** (`change-signals.mjs`): a recorded product change is analysed against approved facts and checks. A person may then file a pending revision, flag a fact for re-review, or dismiss the change. Nothing changes a fact or a test by itself.
 
+## Coverage report
+
+`coverage-report.mjs` reads the run history and changes nothing. It says which checks **count as coverage** on the main staging tenant: a pass within 14 days that is the latest result that counts. Every other check gets a reason (stale, failing, never conclusive, never run on staging, quarantined, not approved). A result counts when it passed or failed in a way that says Lawcus was wrong. Failures blamed on the environment, the tool or storage count neither way. Failures recorded before classification existed have no cause on record, so they count against the check.
+
+It also gives a 90-day quality baseline: failures by class with their denominators, run outcomes, and checks that both passed and failed on the same code. Fixture runs are excluded. It includes runs made while the tool was being built, so it is a baseline to compare against, not today's pass rate. The workspace shows it at the top of **Safety & coverage**.
+
 ## AI use
 
 AI is used only to plan login checks, through a router that names the provider and model (`server/ai/router.mjs`: OpenAI, `gpt-4.1-mini`). The request uses the Responses API with storage disabled and strict validated JSON. Only the operator's request text and the fixed login contract are sent, never browser contents, credentials or evidence. A guard refuses a request that contains anything credential-shaped. No model-generated code or assertion is ever executed, and browser execution and replay use zero model calls. Every model call is logged, and the **AI switch** (`/ai-gate`) can turn all AI use off; the standard plan needs no AI.
@@ -108,6 +114,7 @@ The control service serves these route families. Every browser request needs the
 | `/authoring` | teach / record sessions |
 | `/leftovers` | records a run left behind |
 | `/sweeps` | read-only staging sweep |
+| `/coverage` | read-only coverage and quality report from the run history |
 | `/clarifications` | answer a clarification |
 | `/artifacts` | download evidence |
 | `/ai-gate` | switch AI use on or off |

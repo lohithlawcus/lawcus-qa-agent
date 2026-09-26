@@ -53,6 +53,7 @@ import { API, request, ApiError } from "@/lib/qa-api";
 import { FactReview } from "@/components/fact-review";
 import { ChangeSignals } from "@/components/change-signals";
 import { StagingSweep } from "@/components/staging-sweep";
+import { CoverageReport } from "@/components/coverage-report";
 import { PlanNotices, isBlocked, type PlanBlocker, type PlanReviewRequest } from "@/components/plan-notices";
 type Run = {
   id: string;
@@ -2421,6 +2422,7 @@ export default function Home() {
             </div>
           </TabsContent>
           <TabsContent value="safety">
+            <CoverageReport />
             <div className="safety-grid">
               <div className="panel">
                 <span className="section-label">ENFORCED IN THIS VERSION</span>

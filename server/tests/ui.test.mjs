@@ -104,6 +104,14 @@ ui("a product change is recorded and shows in the list", async () => {
   await page.getByRole("heading", { name: "Contact email is now required" }).first().waitFor();
 });
 
+ui("Safety & coverage lists every check with why it does or does not count", async () => {
+  await tab("Safety & coverage");
+  await page.getByRole("heading", { name: "What counts as coverage today" }).waitFor();
+  // A fresh backend has run nothing, so no approved check can count yet.
+  await page.getByText(/^0 of \d+ checks count as coverage/).waitFor();
+  await page.getByText("Never run on staging").first().waitFor();
+});
+
 ui("Sweep now refuses cleanly when the environment is not set up, and records nothing", async () => {
   await tab("Environment");
   await page.getByRole("button", { name: "Sweep now" }).click();
