@@ -9,6 +9,7 @@ import { finalizeRun } from "../core/run-outcome.mjs";
 import { closeOutCleanup } from "../core/run-cleanup.mjs";
 import { checkStagingBudget, stagingBusy } from "../core/run-admission.mjs";
 import { preflightMessage } from "../core/preflight.mjs";
+import { buildCoverageReport } from "../core/coverage-report.mjs";
 import { currentCodeRevision } from "../core/code-revision.mjs";
 
 // V5 Step 18 / master spec section 41 — Safe Lawcus QA MCP. Every function
@@ -328,6 +329,17 @@ export function getFact({ factCards }, { reference }) {
     trusted,
     ...(trusted ? {} : { warning: `This fact is ${card.derivedStatus.replaceAll("_", " ")}, not approved. Do not treat it as a product rule.` }),
   };
+}
+
+/** Which checks count as coverage on the main staging tenant, and a quality baseline. Read-only. */
+export function getCoverageReport({ db }, { feature } = {}) {
+  const report = buildCoverageReport(db);
+  if (!feature) return report;
+  const wanted = String(feature).trim().toLowerCase();
+  const cases = report.cases.filter((c) => c.feature.toLowerCase() === wanted);
+  if (!cases.length) throw new McpToolError(MCP_ERROR.NOT_FOUND, `No checks are registered for a feature named "${feature}".`);
+  const byState = Object.fromEntries(Object.keys(report.states).map((k) => [k, cases.filter((c) => c.state === k).length]));
+  return { ...report, cases, summary: { cases: cases.length, byState, coveredCases: byState.covered } };
 }
 
 export function listStaleFacts({ changeSignals }, { olderThanDays } = {}) {

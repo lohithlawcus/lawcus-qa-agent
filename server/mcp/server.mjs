@@ -185,6 +185,12 @@ register(
   tools.listStaleFacts,
 );
 register(
+  "get_coverage_report",
+  "Which checks count as coverage on the main staging tenant (a recent pass that is the latest result that counts), why each other check does not, when each last ran, and a quality baseline. Read-only. Optionally limited to one feature.",
+  { feature: z.string().min(1).max(200).optional() },
+  tools.getCoverageReport,
+);
+register(
   "plan_test_request",
   "Plans a request that names a feature from APPROVED knowledge, without running anything: which checks, why each was chosen, what must be set up first, and what blocks the plan. Unapproved relations come back as review requests; destructive requests are refused.",
   { intent: z.string().min(3).max(1000) },

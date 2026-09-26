@@ -23,7 +23,7 @@ A local tool that runs browser checks against the authorized Lawcus staging tena
 - **Says what counts as coverage.** From the run history: which checks passed recently on the main staging tenant, and why each other check does not count.
 - **Keeps Knowledge.** Facts with a source, scope, authority and history; a dependency graph; bulk import; a change loop for product changes. Nothing is trusted until a person approves it.
 - **Plans from Knowledge.** A request that names a feature is planned from approved facts and relations, with the reason for each check and what blocks the plan. Destructive requests are refused.
-- **Exposes an MCP server** (22 tools) that can read, plan, run approved checks and file proposals, but cannot approve, reject, flag, resolve, dismiss or delete anything.
+- **Exposes an MCP server** (23 tools) that can read, plan, run approved checks and file proposals, but cannot approve, reject, flag, resolve, dismiss or delete anything.
 
 ## Start on this Mac
 

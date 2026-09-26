@@ -83,7 +83,7 @@ AI is used only to plan login checks, through a router that names the provider a
 
 The MCP server exposes exactly these tools. None of them approves, rejects, flags, resolves, dismisses or deletes anything.
 
-`search_lawcus_knowledge`, `get_feature_rules`, `find_affected_features`, `find_relevant_test_suites`, `read_test_case`, `read_api_contract`, `create_test_proposal`, `create_failure_analysis_proposal`, `list_pending_proposals`, `run_approved_test`, `run_approved_suite`, `get_run_status`, `get_run_results`, `get_failure_evidence_summary`, `list_facts`, `get_fact`, `list_stale_facts`, `plan_test_request`, `list_change_signals`, `get_change_signal`, `submit_change_signal`, `propose_fact_revision`
+`search_lawcus_knowledge`, `get_feature_rules`, `find_affected_features`, `find_relevant_test_suites`, `read_test_case`, `read_api_contract`, `create_test_proposal`, `create_failure_analysis_proposal`, `list_pending_proposals`, `run_approved_test`, `run_approved_suite`, `get_run_status`, `get_run_results`, `get_failure_evidence_summary`, `list_facts`, `get_fact`, `list_stale_facts`, `get_coverage_report`, `plan_test_request`, `list_change_signals`, `get_change_signal`, `submit_change_signal`, `propose_fact_revision`
 
 The MCP identity (`mcp`) is a non-human identity. A revision it files may claim only observed, inferred or assumed evidence, and submissions are capped at 30 per hour.
 

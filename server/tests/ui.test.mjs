@@ -112,6 +112,29 @@ ui("Safety & coverage lists every check with why it does or does not count", asy
   await page.getByText("Never run on staging").first().waitFor();
 });
 
+ui("the Facts view lists facts with their state and opens one with its evidence", async () => {
+  await tab("Facts & changes");
+  await page.getByRole("tab", { name: "Facts", exact: true }).click();
+  await page.getByRole("heading", { name: "Facts", exact: true }).waitFor();
+  const all = page.getByRole("group", { name: "Filter facts by state" }).getByRole("button", { name: /^All \(\d+\)/ });
+  await all.waitFor();
+  const row = page.locator("button.fact-row").first();
+  const title = (await row.locator("h3").innerText()).trim();
+  await row.click();
+  await page.getByRole("heading", { name: title, exact: true, level: 2 }).waitFor(); // the card, not the row
+  // The card must say where the fact comes from and what it is; a fact card with neither is useless.
+  const card = await page.locator("main").innerText();
+  assert.match(card, /source/i);
+  assert.match(card, /pending|approved|superseded|rejected/i);
+});
+
+ui("approving an API contract says it is now trusted", async () => {
+  await tab("API Contracts");
+  await page.getByText("API CONTRACT INBOX").waitFor();
+  await page.getByRole("button", { name: "Approve", exact: true }).first().click();
+  await page.getByText(/Approved\. It is now part of the trusted/).waitFor();
+});
+
 ui("Sweep now refuses cleanly when the environment is not set up, and records nothing", async () => {
   await tab("Environment");
   await page.getByRole("button", { name: "Sweep now" }).click();
