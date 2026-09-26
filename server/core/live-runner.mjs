@@ -114,8 +114,16 @@ async function submitButton(page,saved){
  for(const value of names){const loc=locator(page,'button',value);const count=await loc.count();if(count>1)throw new Error('Ambiguous login action.');if(count===1&&await loc.isVisible()&&await loc.isEnabled())matches.push({loc,fingerprint:{kind:'button',value}});}
  if(matches.length!==1)throw new Error('The login action could not be resolved uniquely.');return matches[0];
 }
-async function assertIdentity(page,username,appOrigin=STAGING){
- await page.getByPlaceholder('Search your practice',{exact:true}).waitFor({state:'visible'});
+/** Says where a sign-in stalled: how long the wait ran and which page the browser was on (path only, never the query). Appended to the original error so its classification does not change. */
+export function describeLoginStall(page,elapsedMs){
+ let where='unknown page';
+ try{const u=new URL(page.url());where=/\/login\/?$/.test(u.pathname)?'still on the login page (the sign-in did not complete)':`on ${u.pathname} (left the login page but the workspace did not load)`;}catch{}
+ return ` [sign-in wait: ${Math.round(elapsedMs/1000)}s, ${where}]`;
+}
+export async function assertIdentity(page,username,appOrigin=STAGING){
+ const waitStarted=Date.now();
+ try{await page.getByPlaceholder('Search your practice',{exact:true}).waitFor({state:'visible'});}
+ catch(error){error.message+=describeLoginStall(page,Date.now()-waitStarted);throw error;}
  if(new URL(page.url()).origin!==appOrigin)throw new Error('The login left the authorized tenant.');
  let profile=page.getByRole('button').filter({has:page.locator('.MuiAvatar-root')});
  if(await profile.count()===0)profile=page.getByRole('button').filter({has:page.locator('img')});

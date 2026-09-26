@@ -1,3 +1,4 @@
+import { runPreflight } from "../core/preflight.mjs";
 import { resolve } from "node:path";
 import { mkdirSync } from "node:fs";
 import { z } from "zod";
@@ -51,6 +52,7 @@ const ctx = {
   db,
   audit,
   artifactDirectory,
+  preflight: () => runPreflight({ artifactDirectory }),
   resourceOwnership,
   cleanupRunner: createCleanupRunner({ resourceOwnership, mutationJournal, resourceLocks: openResourceLocks(db, audit) }),
   knowledge,

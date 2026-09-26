@@ -104,6 +104,7 @@ Approve a fact or a relationship, approve an API contract, decide whether a chan
 ## If something looks wrong
 
 - **Sign-in stalls or times out:** stop and wait before trying again; repeated attempts have not helped. In this project stalls cleared after some tens of minutes, but the cause is not confirmed.
+- **A run will not start and says "no staging sign-in was used":** the tool found something missing before it spent a sign-in (the evidence key, the evidence folder, the browser, or the network). Fix what it names and start again; nothing was used from your ten-minute allowance.
 - **A run says `inconclusive`:** read the kind above: it is usually the environment, not Lawcus.
 - **Something these docs mention is missing** (for example the Matters feature, or a newer screen's data): restart the service. It applies database updates when it starts.
 - **Anything about credentials:** see `CREDENTIAL-INCIDENT.md`.

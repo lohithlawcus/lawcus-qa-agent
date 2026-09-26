@@ -38,6 +38,8 @@ The check primitives used by the fixture runner are hash-pinned: changing one st
 - **Failure classes** (`failure-class.mjs`): every failed check gets a class and a stable reason code, stored on the result. Only `functional` says the application behaved wrongly. See the operator guide for their meanings.
 - **Evidence:** each result records whether its evidence was `saved`, `save_failed` or `none_captured`. A screenshot that could not be saved makes the check not-a-pass and an `integrity` problem; it never says Lawcus failed.
 - **Admission** (`run-admission.mjs`): three staging sign-ins per ten minutes (a sweep counts as one), and one run or sweep at a time. The app and MCP use the same checks.
+- **Preflight** (`preflight.mjs`): before a staging sign-in is spent, the app and MCP check that the evidence key is in the Keychain, the evidence folder is writable, Chromium is installed and the tenant's hosts resolve (a DNS lookup only, nothing is sent to staging). A failure refuses the run and says what to fix.
+- **Sign-in stalls:** when the workspace does not load after sign-in, the error says how long it waited and whether the browser was still on the login page (path only). The failure is classified exactly as before.
 - **Code revision:** each run records the git commit of the code that produced it.
 
 ## What may reach staging
