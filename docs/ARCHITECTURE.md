@@ -146,4 +146,4 @@ The service applies these in order at startup. The schema version is the highest
 
 ## Where things are
 
-`server/index.mjs` is the control API. `server/core/` holds the runners, accounting, policies and Knowledge. `server/mcp/` is the MCP server. `server/testbook/` registers the native checks and what each provisions. `server/knowledge/` and `server/api-contracts/` hold the seeds. `app/` and `components/` are the workspace. `server/tests/` holds the tests; `npm test` runs the unit and integration tests, and `npm run test:browser` runs the real-Chromium runner tests.
+`server/index.mjs` is the control API. `server/core/` holds the runners, accounting, policies and Knowledge. `server/mcp/` is the MCP server. `server/testbook/` registers the native checks and what each provisions. `server/knowledge/` and `server/api-contracts/` hold the seeds. `app/` and `components/` are the workspace. `server/tests/` holds the tests; `npm test` runs the unit and integration tests, `npm run test:browser` runs the real-Chromium runner tests, and `npm run test:ui` drives the workspace against a throwaway backend (nothing reads the Keychain or reaches staging).

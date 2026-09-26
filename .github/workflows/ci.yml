@@ -69,6 +69,11 @@ jobs:
       - name: Real-Chromium fixture tests
         run: npm run test:browser
 
+      # The workspace in Chromium against a throwaway backend (QA_FORBID_LIVE),
+      # so it never reads a credential or reaches staging.
+      - name: Workspace UI tests
+        run: npm run test:ui
+
       - name: Build
         run: npm run build
 

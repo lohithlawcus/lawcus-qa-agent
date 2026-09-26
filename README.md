@@ -46,6 +46,7 @@ First-time staging setup is in the operator guide. The service applies database 
 ```
 npm test              # unit and integration tests; never reads real credentials, launches a browser or touches staging
 npm run test:browser  # real Chromium against the synthetic fixture; fails, not skips, if Chromium is missing
+npm run test:ui       # the workspace in real Chromium against a throwaway backend; needs ports 4319 and 5173 free
 npm run test:api      # a running local service
 npm run lint
 npm run typecheck
@@ -53,7 +54,7 @@ npm run build
 npm run verify        # all of the above plus a dependency audit
 ```
 
-`npm test` does **not** run the browser tests: run both. Live staging runs are never part of any automated command.
+`npm test` does **not** run the browser tests: run `test:browser` and `test:ui` too. Live staging runs are never part of any automated command.
 
 ## Boundaries
 
