@@ -1,27 +1,147 @@
-# Local V1 architecture
+# Architecture
 
-React workspace → loopback control API → SQLite runbooks/results/audit → deterministic Playwright runner → encrypted staging evidence. macOS Keychain provides staging credentials, the OpenAI key and the evidence encryption key. No hosted deployment is required or enabled.
+**As of 26 September 2026, commit `262dcab` (master).** This describes what the code does now. `DELIVERY-STATUS.md` says what has actually been verified.
 
-## Planning and execution
+The tool is a single-user application on one Mac. A React workspace talks to a loopback control API; a Node service owns a SQLite database, a Playwright runner, the macOS Keychain helper and an MCP server. Nothing is hosted.
 
-OpenAI receives only operator intent and the fixed login contract using the Responses API with structured output and storage disabled. Strict schema checks reject extra fields, unknown scenarios and duplicates. Unsupported behavior requests return clarification; incorrect-password checks cannot execute on staging. No model-generated code or assertion is executed. A separately labeled standard plan provides four fixed staging checks without AI. The synthetic fixture has its own bounded parser and five checks.
+```
+React workspace (127.0.0.1:5173)
+        │  loopback API, exact Origin/Host, custom header, HttpOnly session
+        ▼
+Control service (127.0.0.1:4319, server/index.mjs) ── MCP server (stdio, server/mcp/server.mjs)
+        │                                                    │
+        ├─ SQLite (work/runtime/qa.sqlite)  ◄────────────────┘   (both open the same store)
+        ├─ Playwright runners ──► staging tenant (through a pinned-IP CONNECT proxy)
+        ├─ Synthetic fixture app (127.0.0.1:4320)
+        └─ Keychain helper (server/native/Keychain.swift)
+```
 
-The operator reviews a saved logical plan before execution. Each scenario gets a fresh browser context. Login success requires the protected workspace and the dedicated account identity, not a URL change alone. Logout checks that this browser cannot revisit a protected page; it does not establish server-wide token revocation. A unique semantic locator change can be saved only after unchanged authentication assertions pass. Failure records clarification without rewriting expectations. Replay reads persisted paths and makes no model calls.
+## Four ways a check runs
 
-## Local security boundaries
+All four write results through the same accounting (next section).
 
-Only the exact local UI Origin and service Host are accepted. Browser calls require a custom header and an HttpOnly same-site session. API bodies are bounded, run requests have idempotency keys, and one run is active at a time. Interrupted jobs remain interrupted after restart. Credential updates cannot overlap an active run; browser checks cannot overlap another runner operation. Three staging runs per ten minutes bound repeated authentication; a failed authentication check stops further account attempts within that run.
+| Path | What it is | Where |
+| --- | --- | --- |
+| Fixture runner | The five login checks against the local synthetic app, driven by declarative check definitions. | `runner.mjs`, `dsl.mjs`, `primitives.mjs`, `server/dsl/login/` |
+| Login suite on a real tenant | The same five checks, written as browser code, on Fiveriverz, Co Server, Prod USA or Prod EU. | `live-runner.mjs` (`runLive`) |
+| Native checks | Contacts, Leads and Matters checks on Fiveriverz only, each a real browser flow with a contract check. Run from a plan or by MCP. | `lawcus-native-cases.mjs`, `contacts-browser.mjs`, `leads-browser.mjs`, `matters-browser.mjs`, `impacted-testing.mjs` |
+| Sweep | A read-only look at the tenant's lists for QA-named records. Not a test run. | `staging-sweep.mjs`, `sweep-browser.mjs` |
 
-Staging request authority is fixed in code: the authorized tenant, observed authentication API and exact asset CDN. HTTPS CONNECT resolves approved hosts to public IPv4 addresses and pins them for a run, rejecting private or mixed DNS answers. Browser routing restricts mutation requests to login/logout. Service workers, WebSockets and downloads are disabled. These controls do not replace OS-level isolation against browser compromise or malicious code under the same Mac user.
+The check primitives used by the fixture runner are hash-pinned: changing one stops it running until it is re-approved. That is why classification of their failures is done around them, not inside them.
 
-The Keychain helper only addresses three application-owned secret names and communicates through private pipes. Secret values are not passed in process arguments or stored in SQLite. Screenshots mask input fields, then are encrypted in memory before disk writes. Staging traces contain only fixed action summaries and blocked hosts, not raw DOM, headers, bodies or tokens. AES-256-GCM detects evidence tampering. Downloads decrypt evidence into an operator-controlled copy.
+## One accounting for every run
 
-## Persistence and limitations
+`run-outcome.mjs` decides what a finished run means, for every path above.
 
-SQLite stores environment confirmations with user provenance, logical plans, versioned semantic paths, run results, artifact references, clarification answers and audit events. Runtime data is excluded from source exports. SQLite metadata is not encrypted, so operators must not enter secrets or customer information in intent/clarification fields. Evidence retention, cancellation, backup/restore, multiple-account isolation, hosted identity/RBAC, suites, financial assertions, knowledge ingestion and applying business-rule amendments remain unimplemented.
+- **Outcomes:** `passed` (every planned check ran and passed), `failed` (at least one functional failure), `inconclusive` (nothing showed the application wrong, but a check could not complete, or nothing ran), `partial` (all that ran passed, but some planned checks did not run) and `cancelled`. A run that is not `passed` is never green, and an error or a zero-check run is never `passed`.
+- **Stored status:** `runs.status` keeps the words `passed`, `failed`, `interrupted` and `cancelled`; `interrupted` means "no pass is claimed". The `outcome` and `checks_*` columns carry the truth, so nothing is inferred from a status word. The table's constraint still allows `blocked` and `needs_review` (older fixture runs could use them); none exist in this Mac's history.
+- **Failure classes** (`failure-class.mjs`): every failed check gets a class and a stable reason code, stored on the result. Only `functional` says the application behaved wrongly. See the operator guide for their meanings.
+- **Evidence:** each result records whether its evidence was `saved`, `save_failed` or `none_captured`. A screenshot that could not be saved makes the check not-a-pass and an `integrity` problem; it never says Lawcus failed.
+- **Admission** (`run-admission.mjs`): three staging sign-ins per ten minutes (a sweep counts as one), and one run or sweep at a time. The app and MCP use the same checks.
+- **Code revision:** each run records the git commit of the code that produced it.
 
-Key source modules: `server/index.mjs` (control API), `contracts.mjs` (schemas/fixture contract), `ai-planner.mjs`, `live-runner.mjs`, `runner.mjs` (fixture), `egress.mjs`, `setup.mjs`, `secrets.mjs`, `store.mjs`, and `server/native/Keychain.swift`.
+## What may reach staging
 
-## Operator-driven connection
+Every staging browser context restricts requests before they leave the machine, and a CONNECT proxy pins the tenant's approved public IPv4 addresses.
 
-The Environment view can open a separate, restricted Chromium window for the operator to sign in manually. It captures only the credential fields submitted to the fixed staging login endpoint in process memory, waits for successful authentication and the unchanged account-identity assertion, and only then saves the working account in Keychain. It reports whether it matched the previously saved account as a boolean, never the credential values. Concurrent runs and credential changes are blocked during connection. One submission per attempt, three connection starts per ten minutes, cancellation and a three-minute timeout bound this flow. This connection is not a test pass or a replacement for subsequent deterministic replay.
+- **Login suite:** reads, plus the login and logout requests.
+- **Contacts and Leads checks:** reads, the create and update calls those flows make, and the search calls their pickers use.
+- **Matters check:** the Contacts policy plus `POST /matters`. The app's own settings write is refused.
+- **Sweep:** reads, plus the three list endpoints with a paging body and nothing else. It never types into any field.
+
+The policies are in `live-runner.mjs` (`permit*` functions). They are defense in depth, not an operating-system sandbox.
+
+## Records a check creates
+
+`resource-ownership.mjs` records each record a check creates as soon as its id is known, and records a "may exist" leftover when a create was clicked but never confirmed. Cleanup is **report-only**: the cleanup runner is given no delete handlers, so nothing is deleted. Leftovers are listed for a person to resolve. Protected fixture records can never be recorded as created. The sweep looks for QA-named records the local records do not know about.
+
+## Knowledge
+
+Knowledge is a set of human-approved facts. The AI and MCP can only propose.
+
+- **Facts** (`knowledge.mjs`): each has a type, a statement, a provenance, a required source, an optional scope (roles, configurations, tenants, environments), and a version history. A new version of a fact supersedes the old one only when a person approves it. Approving weaker evidence (observed, inferred or assumed) over a documented or product-approved fact needs a written acknowledgement.
+- **Identity:** the same statement under a new label becomes an alias of the existing fact, not a duplicate. The same words with a different scope are a different fact. A collapse action retires pending duplicates.
+- **Views** (`fact-cards.mjs`): who approved a fact, its source, where it applies, which tests assert it, its history and pending revisions.
+- **Import** (`knowledge-import.mjs`): a plain-text format, atomic: one error fails the whole batch. See `server/knowledge/IMPORT_TEMPLATE.md`.
+- **Dependency graph** (`graph-planner.mjs`): relations between features are directed; each type says which way a change flows and whether one feature needs the other set up first. Only approved relations are used. Pending ones become review requests.
+- **Planning** (`impacted-testing.mjs`, `graph-planner.mjs`): a request that matches a hand-written pattern runs that pattern; otherwise a request naming a feature is planned from approved Knowledge. A plan states why each check was chosen, what must be set up, and what blocks it. Destructive or non-testing requests are never planned, and a blocked plan is never run.
+- **Change loop** (`change-signals.mjs`): a recorded product change is analysed against approved facts and checks. A person may then file a pending revision, flag a fact for re-review, or dismiss the change. Nothing changes a fact or a test by itself.
+
+## AI use
+
+AI is used only to plan login checks, through a router that names the provider and model (`server/ai/router.mjs`: OpenAI, `gpt-4.1-mini`). The request uses the Responses API with storage disabled and strict validated JSON. Only the operator's request text and the fixed login contract are sent, never browser contents, credentials or evidence. A guard refuses a request that contains anything credential-shaped. No model-generated code or assertion is ever executed, and browser execution and replay use zero model calls. Every model call is logged, and the **AI switch** (`/ai-gate`) can turn all AI use off; the standard plan needs no AI.
+
+## MCP tools
+
+The MCP server exposes exactly these tools. None of them approves, rejects, flags, resolves, dismisses or deletes anything.
+
+`search_lawcus_knowledge`, `get_feature_rules`, `find_affected_features`, `find_relevant_test_suites`, `read_test_case`, `read_api_contract`, `create_test_proposal`, `create_failure_analysis_proposal`, `list_pending_proposals`, `run_approved_test`, `run_approved_suite`, `get_run_status`, `get_run_results`, `get_failure_evidence_summary`, `list_facts`, `get_fact`, `list_stale_facts`, `plan_test_request`, `list_change_signals`, `get_change_signal`, `submit_change_signal`, `propose_fact_revision`
+
+The MCP identity (`mcp`) is a non-human identity. A revision it files may claim only observed, inferred or assumed evidence, and submissions are capped at 30 per hour.
+
+## Secrets and redaction
+
+Credentials live in macOS Keychain (the staging accounts, the OpenAI key and the evidence key). They are never in SQLite or process arguments. `redact.mjs` masks credentials in audit events, stored results and reasons, error responses, MCP results, captured console output and change signals, and password inputs are masked in screenshots. It masks values the process has read plus credential-shaped text. It cannot recognise a secret that was never read from the Keychain and has no label around it. Staging evidence is AES-256-GCM encrypted at rest; a download makes a decrypted copy.
+
+## HTTP routes
+
+The control service serves these route families. Every browser request needs the exact UI origin, the custom header and a session.
+
+| Route | Purpose |
+| --- | --- |
+| `/session` | open a local session |
+| `/state` | everything the workspace shows |
+| `/setup` | credentials, browser sign-in, status |
+| `/runner/check` | check the browser |
+| `/plans` | plan a login test |
+| `/runs` | start, read and cancel runs |
+| `/impacted-tests` | plan and run native checks |
+| `/proposals` | review proposals |
+| `/knowledge` | import, review, facts, duplicates, stale facts |
+| `/change-signals` | record and review product changes |
+| `/api-contracts` | API contracts and their approval |
+| `/network-authorities` | approved network authority |
+| `/environment-adapters` | approved environment adapters |
+| `/personas` | verified personas |
+| `/authoring` | teach / record sessions |
+| `/leftovers` | records a run left behind |
+| `/sweeps` | read-only staging sweep |
+| `/clarifications` | answer a clarification |
+| `/artifacts` | download evidence |
+| `/ai-gate` | switch AI use on or off |
+
+## Database migrations
+
+The service applies these in order at startup. The schema version is the highest number applied.
+
+| Migration | Adds |
+| --- | --- |
+| `001_initial.sql` | runbooks, runs, results, audit |
+| `002_idempotency.sql` | idempotent run requests |
+| `003_environment_confirmation.sql` | environment confirmations |
+| `004_proposals.sql` | proposals |
+| `005_testbook.sql` | features, suites, test cases and versions |
+| `006_execution_manifest.sql` | frozen execution manifests |
+| `007_intent_router.sql` | request routing |
+| `008_model_usage.sql` | model call log |
+| `009_knowledge_graph.sql` | facts and the relation graph |
+| `010_api_contracts.sql` | API contracts |
+| `011_network_observer.sql` | network observations |
+| `012_personas.sql` | personas |
+| `013_resource_locks.sql` | ownership and resource locks |
+| `014_authoring_sessions.sql` | teach / record sessions |
+| `015_knowledge_structured_fields.sql` | structured fact fields |
+| `016_impacted_testing_origin.sql` | impacted testing as a proposal origin |
+| `017_mcp_origin.sql` | MCP as a proposal origin |
+| `018_ai_gate.sql` | the AI switch |
+| `019_multi_environment.sql` | several environments |
+| `020_truthful_run_accounting.sql` | outcome, counts, evidence status, quarantine, code revision |
+| `021_knowledge_aliases.sql` | fact aliases |
+| `022_change_signals.sql` | change signals and review flags |
+| `023_failure_classes.sql` | failure class and reason code on results |
+| `024_fact_scope.sql` | fact scope |
+| `025_staging_sweeps.sql` | sweeps and their findings |
+
+## Where things are
+
+`server/index.mjs` is the control API. `server/core/` holds the runners, accounting, policies and Knowledge. `server/mcp/` is the MCP server. `server/testbook/` registers the native checks and what each provisions. `server/knowledge/` and `server/api-contracts/` hold the seeds. `app/` and `components/` are the workspace. `server/tests/` holds the tests; `npm test` runs the unit and integration tests, and `npm run test:browser` runs the real-Chromium runner tests.
