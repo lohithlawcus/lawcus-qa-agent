@@ -149,6 +149,8 @@ type KnowledgeItem = {
   status: string;
   created_at: string;
   applies_to: string[] | null;
+  // where the fact holds, when it does not hold everywhere (roles, configurations, tenants, environments)
+  scope?: Record<string, string[]> | null;
   preconditions: string[] | null;
   expected_behavior: Record<string, Record<string, string>> | null;
   effective_from: string | null;
@@ -379,6 +381,12 @@ type ImpactedRunResult = {
   results: ImpactedCell[];
   filedProposals: { id: string; summary: string }[];
 };
+const scopeText = (scope: Record<string, string[]> | null | undefined) =>
+  scope
+    ? Object.entries(scope)
+        .map(([key, values]) => `${key}: ${values.join(", ")}`)
+        .join(" · ")
+    : "";
 const date = (s: string) =>
   new Date(s).toLocaleString(undefined, {
     month: "short",
@@ -1803,7 +1811,10 @@ export default function Home() {
                       One field per line, no multi-line values. <code>## Feature:</code> starts a
                       group (needs a <code>Description:</code> the first time it appears);{" "}
                       <code>### TYPE: SEMANTIC-ID</code> starts one item;{" "}
-                      <code>### EDGE: TYPE</code> links two existing features.
+                      <code>### EDGE: TYPE</code> links two existing features. Every item needs a{" "}
+                      <code>Source Title:</code>. <code>Scope:</code> is optional and only for a fact that
+                      holds for some roles, configurations, tenants or environments, e.g.{" "}
+                      <code>Scope: roles=admin,owner; environments=lawcus</code>.
                     </p>
                     <div className="format-guide-example">{EXAMPLE_KNOWLEDGE_TEXT}</div>
                   </AccordionContent>
@@ -1880,6 +1891,8 @@ export default function Home() {
                               {k.type.replaceAll("_", " ")}
                             </Badge>
                             <Badge variant="outline">{k.provenance}</Badge>
+                            {/* a revision that changes only the scope reads the same, so say which version this is */}
+                            {k.version > 1 && <Badge variant="outline">revision v{k.version}</Badge>}
                             {k.applies_to?.map((a) => (
                               <Badge variant="outline" key={a}>
                                 {a.replaceAll("_", " ")}
@@ -1893,6 +1906,11 @@ export default function Home() {
                           {k.does_not_mean && (
                             <p className="subtle">
                               Does not mean: {k.does_not_mean}
+                            </p>
+                          )}
+                          {k.scope && (
+                            <p className="subtle">
+                              <strong>Applies only to</strong> {scopeText(k.scope)}
                             </p>
                           )}
                           {k.preconditions && k.preconditions.length > 0 && (
@@ -2031,6 +2049,11 @@ export default function Home() {
                           </div>
                           <h3>{k.title}</h3>
                           <p className="subtle">{k.statement}</p>
+                          {k.scope && (
+                            <p className="subtle">
+                              <strong>Applies only to</strong> {scopeText(k.scope)}
+                            </p>
+                          )}
                           {(k.api_contracts.length > 0 || k.related_tests.length > 0) && (
                             <p className="small-note">
                               {k.api_contracts.length > 0 &&

@@ -17,6 +17,15 @@ Rules:
   follow its type's prefix convention (BR-, FIELD-, PERM-, DEP-, WF-, API-,
   UI-, DATA-, ENV-, LIMIT-, CHANGE-, INT-, VAL-, CALC-, SEC-, EDGE-) and end in
   a 3-digit number, e.g. `BR-BILLING-LATE-FEE-001`.
+- `Scope:` (optional) is only for a fact that holds for some roles,
+  configurations, tenants or environments and not others, e.g.
+  `Scope: roles=admin,owner; environments=lawcus`. Allowed keys: `roles`,
+  `configurations`, `tenants`, `environments`, each a comma-separated list;
+  separate keys with semicolons; one `Scope:` line per item. Leave the line out
+  for a fact that applies everywhere. The same statement with a different scope
+  is a different fact; adding a scope to a fact that already exists files a
+  pending revision of it. An empty scope, an unknown key, or a repeated line
+  fails the whole import. Relationships have no scope.
 - `### EDGE: <EDGE_TYPE>` starts a relationship between two features that
   must already exist (created earlier in this file, or already in the
   system).
@@ -41,6 +50,7 @@ Provenance: DOCUMENTED
 Statement: A matter must have at least one timekeeper assigned before an invoice can be generated for it.
 Does Not Mean: This does not require the timekeeper to have logged any billable time yet.
 Applies To: existing_matter
+Scope: roles=owner,admin; environments=lawcus
 Source Title: Lawcus Support — Billing overview
 Source URL: https://support.lawcus.com/en/articles/example-billing-overview
 Release: 2026.09

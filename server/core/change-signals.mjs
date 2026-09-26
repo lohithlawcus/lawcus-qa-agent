@@ -234,10 +234,19 @@ export function openChangeSignals(db, audit, { knowledge, testbook }) {
     const approved = target && db.prepare("SELECT * FROM knowledge_items WHERE semantic_id=? AND status='approved'").get(target.semantic_id);
     if (!approved) fail("no_approved_fact", "Only an existing approved fact can be revised from a signal.");
     const featureName = db.prepare("SELECT name, description FROM features WHERE id=?").get(approved.feature_id);
+    // A revision changes the STATEMENT. Everything else about the fact carries
+    // over: where it applies (scope, record kinds, dates, release), what it
+    // needs, and the tests and contracts that assert it. Dropping any of these
+    // would quietly widen or orphan the fact when the revision is approved.
+    const json = (value) => (value ? JSON.parse(value) : null);
+    const links = knowledge.itemLinks(approved.id);
     const pending = knowledge.proposeItem({
       semanticId: approved.semantic_id, type: approved.type, featureName: featureName.name, featureDescription: featureName.description,
       title: approved.title, statement: statement.trim(), doesNotMean: approved.does_not_mean, provenance,
       source: { title: signal.title, url: signal.source_ref ?? undefined, author: proposedBy ?? signal.submitted_by },
+      appliesTo: json(approved.applies_to), preconditions: json(approved.preconditions), expectedBehavior: json(approved.expected_behavior),
+      effectiveFrom: approved.effective_from, effectiveUntil: approved.effective_until, release: approved.release,
+      scope: json(approved.scope), relatedTests: links.relatedTests, apiContracts: links.apiContracts,
     });
     if (pending.id === approved.id) return { unchanged: true, before: approved.statement, after: approved.statement, item: null };
     db.prepare("INSERT OR IGNORE INTO change_signal_items(id,signal_id,knowledge_item_id,relation,created_at) VALUES(?,?,?,'proposes',?)")
