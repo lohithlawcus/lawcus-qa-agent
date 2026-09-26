@@ -82,7 +82,7 @@ These were run against real staging on 26 September 2026 but written to a scratc
 ## Implemented, but never run against real staging
 
 - The login suite's rejected-account and skipped-check branches (unit-tested only).
-- The Knowledge, Product-change and Staging-sweep screens were checked in a browser against a copy of the real data, and `npm run test:ui` drives a few of their paths (a refused import, the example import, an approval, recording a product change, a refused sweep) against a throwaway backend. The Facts view, API Contracts (approving a contract) and the Safety & coverage panel are also covered. Personas and Teach / Record have no automated UI test.
+- The Knowledge, Product-change and Staging-sweep screens were checked in a browser against a copy of the real data, and `npm run test:ui` drives a few of their paths (a refused import, the example import, an approval, recording a product change, a refused sweep) against a throwaway backend. The Facts view, API Contracts (approving a contract) and the Safety & coverage panel are also covered. Personas and Teach / Record are covered only for their refusals (an empty label or description, and no recording when the browser cannot open); registering a verified persona and a real recording need a visible sign-in and are checked by hand.
 - The change loop's integrations (Jira, Figma, Git) do not exist. Changes are entered by hand.
 
 ## Known limits
