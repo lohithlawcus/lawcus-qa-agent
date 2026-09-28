@@ -840,7 +840,11 @@ export async function readContactCustomFieldViaBrowser({ context, uuid, fieldNam
   const page = await context.newPage();
   try {
     await page.goto(`${STAGING}/contact/${uuid}`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(2000);
+    // Was a fixed 2000ms pause before the fixed-position Edit click below.
+    // Removed rather than replaced: openEditCustomFields's own 3-attempt
+    // retry loop already exists specifically for this exact race (a cold
+    // detail-page load beating the click), with real evidence it works —
+    // see its comment. A second, blinder guess in front of it added nothing.
     await openEditCustomFields(page);
     await ensureFieldOnForm(page, fieldName);
     const value = await customFieldValueInput(page, fieldName).inputValue();
@@ -865,7 +869,8 @@ export async function updateContactCustomFieldViaBrowser({ context, apiContracts
   const page = await context.newPage();
   try {
     await page.goto(`${STAGING}/contact/${uuid}`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(2000);
+    // Removed — see the identical comment in readContactCustomFieldViaBrowser
+    // above; openEditCustomFields's own retry loop covers this race.
     await openEditCustomFields(page);
     if (newValue === "") {
       // Restoring to "unset" — see removeFieldFromForm's comment. A no-op
