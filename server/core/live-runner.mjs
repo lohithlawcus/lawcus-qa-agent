@@ -503,33 +503,7 @@ export async function startAuthoringSession({environmentId,origin,personaId=null
 // still launching invisibly; the user asked to watch these run too, same
 // as runLive()'s own headed launch above.
 export async function runContactCustomFieldCheck({apiContracts,mutationJournal,runId,uuid,fieldName,newValue,primitiveId='contacts.update_custom_field_via_browser'}){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  // Bumped from 20000 -> 35000 (2026-09-16): two real staging runs each
-  // showed the FIRST real login of a rapid back-to-back batch timing out
-  // waiting for the post-login identity check, while every login right
-  // after it (same code) succeeded normally — real staging-side slowness
-  // on a cold first login, not a bug in this flow.
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await updateAndRestoreContactCustomFieldViaBrowser({context,apiContracts,mutationJournal,environmentId:'lawcus',runId,uuid,fieldName,newValue,primitiveId});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitContactsRequest,(context)=>updateAndRestoreContactCustomFieldViaBrowser({context,apiContracts,mutationJournal,environmentId:'lawcus',runId,uuid,fieldName,newValue,primitiveId}));
 }
 
 // V5 Step 15 — Leads, browser-driven, mirroring runContactCustomFieldCheck
@@ -538,30 +512,7 @@ export async function runContactCustomFieldCheck({apiContracts,mutationJournal,r
 // Uses permitLeadsRequest — NOT permitLiveRequest or permitContactsRequest
 // — so neither existing policy is silently widened by this.
 export async function runLeadCustomFieldCheck({apiContracts,mutationJournal,runId,uuid,fieldName,newValue,primitiveId='leads.update_custom_field_via_browser'}){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:LEADS_VIEWPORT});
-  // Bumped from 20000 -> 35000 (2026-09-16) — see the identical comment in
-  // runContactCustomFieldCheck above.
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitLeadsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await updateAndRestoreLeadCustomFieldViaBrowser({context,apiContracts,mutationJournal,environmentId:'lawcus',runId,uuid,fieldName,newValue,primitiveId});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitLeadsRequest,(context)=>updateAndRestoreLeadCustomFieldViaBrowser({context,apiContracts,mutationJournal,environmentId:'lawcus',runId,uuid,fieldName,newValue,primitiveId}),{viewport:LEADS_VIEWPORT});
 }
 
 // V5 Step 15 — new-Contact creation, browser-driven, completing the
@@ -570,30 +521,7 @@ export async function runLeadCustomFieldCheck({apiContracts,mutationJournal,runI
 // runContactCustomFieldCheck; hands off to contacts-browser.mjs's
 // createContactViaBrowser for the actual creation + correlation.
 export async function runContactCreationCheck({apiContracts,firstName,lastName}){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  // Bumped from 20000 -> 35000 (2026-09-16) — see the identical comment in
-  // runContactCustomFieldCheck above.
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await createContactViaBrowser({context,apiContracts,firstName,lastName});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitContactsRequest,(context)=>createContactViaBrowser({context,apiContracts,firstName,lastName}));
 }
 
 // V5 "Start with Contacts" (2026-09-16) — Create Contact suite, first
@@ -603,28 +531,7 @@ export async function runContactCreationCheck({apiContracts,firstName,lastName})
 // verifyMandatoryFieldValidationViaBrowser's comment). Same
 // login/permit/close discipline as runContactCreationCheck.
 export async function runContactMandatoryFieldValidationCheck(){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await verifyMandatoryFieldValidationViaBrowser({context});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitContactsRequest,(context)=>verifyMandatoryFieldValidationViaBrowser({context}));
 }
 
 // V5 "explore Contacts in more detail" (2026-09-18) — the comprehensive
@@ -633,28 +540,7 @@ export async function runContactMandatoryFieldValidationCheck(){
 // re-reads the real detail page to confirm each one actually saved. Same
 // login/permit/close discipline as every other Contacts check above.
 export async function runContactAllFieldsCreationCheck({apiContracts,marker}){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await createContactAllFieldsViaBrowser({context,apiContracts,marker});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitContactsRequest,(context)=>createContactAllFieldsViaBrowser({context,apiContracts,marker}));
 }
 
 // V5 "explore Contacts in more detail" (2026-09-18) — a real validation
@@ -662,28 +548,7 @@ export async function runContactAllFieldsCreationCheck({apiContracts,marker}){
 // Lawcus's own phone validation. Same login/permit/close discipline as
 // runContactMandatoryFieldValidationCheck.
 export async function runContactPhoneValidationCheck(){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await verifyPhoneNumberValidationViaBrowser({context});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitContactsRequest,(context)=>verifyPhoneNumberValidationViaBrowser({context}));
 }
 
 // V5 "explore Contacts in more detail" (2026-09-18) — a real cascading
@@ -691,28 +556,7 @@ export async function runContactPhoneValidationCheck(){
 // required "Fixed rate" field with no prior indication it exists. Same
 // login/permit/close discipline as every other Contacts check above.
 export async function runContactBillingRateValidationCheck(){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await verifyBillingRateRequiredValidationViaBrowser({context});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitContactsRequest,(context)=>verifyBillingRateRequiredValidationViaBrowser({context}));
 }
 
 // V5 "Start with Contacts" (2026-09-16) — Create Contact - Company suite,
@@ -720,84 +564,19 @@ export async function runContactBillingRateValidationCheck(){
 // login/permit/close discipline; hands off to contacts-browser.mjs's
 // createCompanyContactViaBrowser.
 export async function runContactCompanyCreationCheck({apiContracts,name}){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await createCompanyContactViaBrowser({context,apiContracts,name});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitContactsRequest,(context)=>createCompanyContactViaBrowser({context,apiContracts,name}));
 }
 
 // V5 "Start with Contacts" (2026-09-16) — Create Contact - Company suite,
 // the Company-type counterpart to runContactMandatoryFieldValidationCheck.
 export async function runContactCompanyMandatoryFieldValidationCheck(){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitContactsRequest(route.request().url(),route.request().method(),route.request().resourceType(),route.request().postData())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await verifyMandatoryFieldValidationCompanyViaBrowser({context});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitContactsRequest,(context)=>verifyMandatoryFieldValidationCompanyViaBrowser({context}));
 }
 
 // V5 Step 15 — new-Lead creation, browser-driven, the UI/new cell for
 // Leads in section 50's matrix. Mirrors runContactCreationCheck.
 export async function runLeadCreationCheck({apiContracts,firstName,lastName,matterName}){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:LEADS_VIEWPORT});
-  // Bumped from 20000 -> 35000 (2026-09-16) — see the identical comment in
-  // runContactCustomFieldCheck above.
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitLeadsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await createLeadViaBrowser({context,apiContracts,firstName,lastName,matterName});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitLeadsRequest,(context)=>createLeadViaBrowser({context,apiContracts,firstName,lastName,matterName}),{viewport:LEADS_VIEWPORT});
 }
 
 // V5 "Keep going with Leads" (2026-09-16) — Create Lead - Person suite,
@@ -806,28 +585,7 @@ export async function runLeadCreationCheck({apiContracts,firstName,lastName,matt
 // (see verifyLeadMandatoryFieldValidationViaBrowser's comment). Same
 // login/permit/close discipline as runLeadCreationCheck.
 export async function runLeadMandatoryFieldValidationCheck(){
- let browser,proxy,context;
- try{
-  const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
-  proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:LEADS_VIEWPORT});
-  context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
-  await context.routeWebSocket(/.*/,socket=>socket.close());
-  await context.route('**/*',async route=>{
-   if(!permitLeadsRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
-   await route.continue();
-  });
-  const page=await context.newPage();page.on('dialog',d=>void d.dismiss());
-  await page.goto(STAGING+'/login',{waitUntil:'domcontentloaded'});
-  const email=await field(page,'email');const password=await field(page,'password');const submit=await submitButton(page);
-  await email.loc.fill(creds.username);await password.loc.fill(creds.password);await submit.loc.click();
-  await assertIdentity(page,creds.username);
-  await page.close();
-  return await verifyLeadMandatoryFieldValidationViaBrowser({context});
- }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
- }
+ return withLoggedInContext(permitLeadsRequest,(context)=>verifyLeadMandatoryFieldValidationViaBrowser({context}),{viewport:LEADS_VIEWPORT});
 }
 
 // Contact -> Matter slice (2026-09-26). The write policy is the Contacts one
@@ -839,15 +597,25 @@ export function permitMattersRequest(url,method,resourceType,postData){
  let u;try{u=new URL(url);}catch{return false;}
  return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&u.origin===API_ORIGIN&&method==='POST'&&u.pathname==='/matters';
 }
-// One login, then hand the signed-in context to `work`. Same login/permit/close
-// discipline as runContactCreationCheck, kept in one place for the Matter checks.
-async function withLoggedInContext(permit,work){
+// One login, then hand the signed-in context to `work`. Every Contacts, Leads
+// and Matters check above shared this exact sequence as copied inline code
+// (2026-09-16 through 2026-09-26); consolidated here 2026-09-28 so a change
+// to the login step — like the 20000->35000 timeout bump, made piecemeal
+// across several of those copies — only needs to happen once. Behavior is
+// unchanged: same egress hosts, same timeouts, same close order. `viewport`
+// defaults to CONTACTS_VIEWPORT, the default every caller but Leads used.
+async function withLoggedInContext(permit,work,{viewport=CONTACTS_VIEWPORT}={}){
  let browser,proxy,context;
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
   browser=await launch(proxy,false);
-  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport:CONTACTS_VIEWPORT});
+  context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport});
+  // Bumped from 20000 -> 35000 (2026-09-16): two real staging runs each showed
+  // the FIRST real login of a rapid back-to-back batch timing out waiting for
+  // the post-login identity check, while every login right after it (same
+  // code) succeeded normally — real staging-side slowness on a cold first
+  // login, not a bug in this flow.
   context.setDefaultTimeout(35000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
   await context.route('**/*',async route=>{

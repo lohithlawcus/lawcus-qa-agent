@@ -24,7 +24,7 @@ All four write results through the same accounting (next section).
 | --- | --- | --- |
 | Fixture runner | The five login checks against the local synthetic app, driven by declarative check definitions. | `runner.mjs`, `dsl.mjs`, `primitives.mjs`, `server/dsl/login/` |
 | Login suite on a real tenant | The same five checks, written as browser code, on Fiveriverz, Co Server, Prod USA or Prod EU. | `live-runner.mjs` (`runLive`) |
-| Native checks | Contacts, Leads and Matters checks on Fiveriverz only, each a real browser flow with a contract check. Run from a plan or by MCP. | `lawcus-native-cases.mjs`, `contacts-browser.mjs`, `leads-browser.mjs`, `matters-browser.mjs`, `impacted-testing.mjs` |
+| Native checks | Contacts, Leads and Matters checks on Fiveriverz only, each a real browser flow with a contract check. Run from a plan or by MCP. Every native check's sign-in goes through one shared helper (`live-runner.mjs`'s `withLoggedInContext`), so the egress hosts, timeouts and close order are defined once, not copied per check. | `lawcus-native-cases.mjs`, `contacts-browser.mjs`, `leads-browser.mjs`, `matters-browser.mjs`, `impacted-testing.mjs` |
 | Sweep | A read-only look at the tenant's lists for QA-named records. Not a test run. | `staging-sweep.mjs`, `sweep-browser.mjs` |
 
 The check primitives used by the fixture runner are hash-pinned: changing one stops it running until it is re-approved. That is why classification of their failures is done around them, not inside them.
