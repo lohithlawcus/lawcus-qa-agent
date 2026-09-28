@@ -114,7 +114,11 @@ async function openEditCustomFields(page) {
   }
   if (lastError) throw lastError;
   await page.getByText("Custom Fields", { exact: true }).first().click();
-  await page.waitForTimeout(500);
+  // Was a fixed 500ms pause for the section's own expand animation. Waits
+  // instead for the one thing every caller needs next: the field search box
+  // ensureFieldOnForm types into. .catch() tolerates a tenant where the
+  // section opens pre-expanded with no search box to wait for.
+  await page.getByPlaceholder("Start typing to search").waitFor({ state: "visible" }).catch(() => {});
 }
 
 /** Adds a non-default custom field to the currently-open edit form via its
@@ -127,10 +131,15 @@ async function ensureFieldOnForm(page, fieldName) {
   if (already > 0) return;
   await page.getByPlaceholder("Start typing to search").click();
   await page.keyboard.type(fieldName);
-  await page.waitForTimeout(1000);
+  // Was a fixed 1000ms pause for the search's own debounce. Waits instead for
+  // a result option to actually appear — the concrete thing ArrowDown needs.
+  await page.getByRole("option").first().waitFor({ state: "visible" }).catch(() => {});
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await page.waitForTimeout(500);
+  // Was a fixed 500ms pause for the field to be added to the form. Waits
+  // instead for this function's own success condition (the field's label now
+  // showing), so a caller never proceeds before the add actually took.
+  await page.getByText(fieldName, { exact: true }).first().waitFor({ state: "visible" });
 }
 
 /** Removes a custom field from the currently-open edit form via its own
@@ -174,15 +183,25 @@ async function removeFieldFromForm(page, valueInputLocator) {
  * create/validate case below (Person and Company alike). */
 async function openNewContactDialog(page) {
   await page.goto(STAGING + "/dashboard", { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1500);
-  await page.locator("text=Contacts").first().click();
-  await page.waitForTimeout(1500);
-  await page.getByText("New Contact", { exact: false }).first().click().catch(async () => {
+  // Each of the three fixed 1500ms pauses below stood in for the dashboard's
+  // own SPA render, the Contacts list's load, and the New Contact dialog's
+  // render, in turn. Waits instead for the concrete element each next step
+  // needs, so a cold-starting tenant (documented elsewhere in this file) gets
+  // however long it actually needs rather than a guessed 1.5s.
+  const contactsNav = page.locator("text=Contacts").first();
+  await contactsNav.waitFor({ state: "visible" });
+  await contactsNav.click();
+  const newContact = page.getByText("New Contact", { exact: false }).first();
+  await newContact.waitFor({ state: "visible" }).catch(() => {});
+  await newContact.click().catch(async () => {
     await page.getByRole("button", { name: /new/i }).first().click();
-    await page.waitForTimeout(500);
-    await page.getByText("New Contact", { exact: false }).first().click();
+    await newContact.waitFor({ state: "visible" });
+    await newContact.click();
   });
-  await page.waitForTimeout(1500);
+  // The dialog's own Person-type default field (see selectCompanyType's
+  // comment: Person is the default even for a caller about to switch to
+  // Company) — every caller needs the dialog open before touching it.
+  await page.locator('input[name="firstName"], input[placeholder*="First"]').first().waitFor({ state: "visible" });
 }
 
 /** Switches the open New Contact dialog to Company type. Person is the
@@ -195,7 +214,10 @@ async function openNewContactDialog(page) {
 async function selectCompanyType(page) {
   const dialog = page.locator('[role="dialog"]');
   await dialog.getByText("Company", { exact: true }).first().click();
-  await page.waitForTimeout(500);
+  // Was a fixed 500ms pause for the form to re-render as Company's Basic
+  // Details (no First/Middle/Last split — see this function's own comment).
+  // Waits instead for the field every caller fills right after this returns.
+  await page.locator('input[name="name"]').first().waitFor({ state: "visible" });
 }
 
 /**
