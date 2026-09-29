@@ -21,7 +21,7 @@ import { now } from "../core/store.mjs";
 // tiers for tasks that don't exist yet would be routing "for appearance,"
 // which the spec explicitly says not to do.
 export const TASK_POLICY = {
-  planLogin: { provider: "openai", model: "gpt-4.1-mini" },
+  planLogin: { provider: "openai", model: "gpt-6-luna" },
 };
 
 export class ModelRoutingError extends Error {

@@ -2,7 +2,7 @@
 
 No finite test suite proves that every case is covered or that security lapses are impossible. Track tested requirements, evidence, uncertainty and exclusions explicitly. Prioritize by impact and likelihood; require human review before widening autonomous authority.
 
-**As of 26 September 2026, commit `262dcab`.** The lists below are what should eventually be covered. The next table says where each area stands today. "Covered" means an automated test exists for it; it does not mean it was tested on real staging (see `DELIVERY-STATUS.md`).
+**As of 29 September 2026, commit `2529b3e` (baseline), with the later AI safety changes in this branch.** The lists below are what should eventually be covered. The next table says where each area stands today. "Covered" means an automated test exists for it; it does not mean it was tested on real staging (see `DELIVERY-STATUS.md`).
 
 | Area | Status | Where it stands |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ No finite test suite proves that every case is covered or that security lapses a
 | Cleanup and ownership | Partial | Created records are recorded and leftovers reported (tested). Nothing is ever deleted, and nothing is deleted by name. |
 | Knowledge: source conflicts, inference promoted to fact, stale facts, circular dependencies | Partial | Weaker evidence needs a written acknowledgement to replace stronger; stale facts are listed; cycles block a plan (all tested). A second approval of the same item is refused (tested). |
 | No silent retries, no false green | Covered | See the run accounting in `ARCHITECTURE.md`. The single login retry in native checks is recorded. |
-| Billing, dates and time zones, accessibility, integrations, AI failure modes | Not covered | Only login, Contacts, Leads and one Matter flow exist. |
+| Billing, dates and time zones, accessibility, integrations, AI failure modes | Partial | AI calls now have a local decision integrity chain, a request limit and a persisted pause for repeated failures. Broader AI evaluations and the other listed areas remain uncovered. Only login, Contacts, Leads and one Matter flow exist. |
 
 ## P0 — security and irreversible impact
 

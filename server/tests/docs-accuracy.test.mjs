@@ -9,6 +9,7 @@ import { summarizeCells } from "../core/run-outcome.mjs";
 import { STAGING_RUN_LIMIT, STAGING_RUN_WINDOW_MS } from "../core/run-admission.mjs";
 import { MCP_HOURLY_LIMIT } from "../mcp/tools.mjs";
 import { NATIVE_SUITE_MEMBERS, NATIVE_QUARANTINE } from "../testbook/lawcus-native-cases.mjs";
+import { TASK_POLICY } from "../ai/router.mjs";
 
 // The operator-facing docs make claims about the code. This keeps them honest:
 // when the code changes and a doc does not, a test here fails.
@@ -133,8 +134,7 @@ test("the limits the docs state match the code", () => {
   for (const path of ["docs/OPERATOR-GUIDE.md", "docs/ARCHITECTURE.md", "docs/DELIVERY-STATUS.md"]) {
     assert.match(docs[path], /three (?:staging )?sign-ins per ten minutes|Runs are capped at three per ten minutes/i, `${path} states the sign-in budget`);
   }
-  const router = read("server/ai/router.mjs");
-  assert.ok(router.includes("gpt-4.1-mini") && docs["docs/ARCHITECTURE.md"].includes("gpt-4.1-mini"));
+  assert.ok(docs["docs/ARCHITECTURE.md"].includes(TASK_POLICY.planLogin.model), "the AI model in the docs matches the live policy");
   assert.ok(read("server/ai/providers/openai.mjs").includes("store: false") && /storage disabled/.test(docs["docs/ARCHITECTURE.md"]));
 });
 

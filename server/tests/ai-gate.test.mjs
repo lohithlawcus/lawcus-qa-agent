@@ -172,3 +172,94 @@ test("usageSummary respects the sinceIso window — old requests fall outside it
     assert.equal(summary.totalRequests, 0);
   });
 });
+
+test("an AI request is logged before the provider runs, and the linked ledger detects a changed row", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qa-ai-ledger-"));
+  try {
+    const { db, audit } = openStore(dir);
+    const gate = openAiGate(db, audit, { modelRouter: { async run() {
+      const pending = db.prepare("SELECT * FROM ai_gate_requests WHERE error_code='in_flight'").get();
+      assert.ok(pending, "the provider call must have a durable starting record");
+      assert.equal(db.prepare("SELECT phase FROM ai_decision_ledger WHERE gate_request_id=?").get(pending.id).phase, "started");
+      return { provider: "fake", source: "fake", plan: { title: "Login essentials", scenarios: ["valid_login"] }, usage: { model: "fake", inputTokens: 1, outputTokens: 2 } };
+    } } });
+    const result = await gate.run("planLogin", { intent: "safe intent" }, { requester: "operator:test", reason: "test" });
+    const ledger = db.prepare("SELECT * FROM ai_decision_ledger ORDER BY sequence").all();
+    assert.deepEqual(ledger.map((r) => r.phase), ["started", "completed"]);
+    assert.equal(ledger[1].previous_hash, ledger[0].entry_hash);
+    assert.ok(!JSON.stringify(ledger).includes("safe intent"), "raw intent must not be kept in the ledger");
+    assert.equal(gate.usageSummary().safety.ledger.intact, true);
+    db.prepare("UPDATE ai_decision_ledger SET task='changed' WHERE sequence=?").run(ledger[0].sequence);
+    await assert.rejects(
+      gate.run("planLogin", { intent: "another" }, { requester: "operator:test", reason: "test" }),
+      (e) => e instanceof AiGateError && e.code === "ledger_integrity",
+    );
+    assert.equal(gate.usageSummary().safety.circuit.circuit_open, 1);
+    assert.equal(gate.usageSummary().safety.incidents[0].reason_code, "ledger_integrity");
+    assert.throws(() => gate.setEnabled(true, "operator:test"), (e) => e.code === "ledger_integrity");
+    assert.ok(result.aiGateRequestId);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("three provider failures pause AI across gate instances; a human can reset it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qa-ai-circuit-"));
+  try {
+    const { db, audit } = openStore(dir);
+    let calls = 0;
+    const router = { async run() { calls++; throw new Error("synthetic provider outage"); } };
+    const gate = openAiGate(db, audit, { modelRouter: router });
+    for (let i = 0; i < 3; i++)
+      await assert.rejects(gate.run("planLogin", { intent: `failure ${i}` }, { requester: "operator:test", reason: "test" }), /synthetic provider outage/);
+    const reopened = openAiGate(db, audit, { modelRouter: router });
+    assert.equal(reopened.usageSummary().safety.circuit.circuit_open, 1);
+    await assert.rejects(reopened.run("planLogin", { intent: "blocked" }, { requester: "operator:test", reason: "test" }), (e) => e.code === "circuit_open");
+    assert.equal(calls, 3, "an open circuit never calls the provider");
+    assert.equal(reopened.usageSummary().safety.incidents[0].status, "open");
+    assert.throws(() => reopened.setEnabled(true, "ai_planner"), (e) => e.code === "non_human_approver");
+    reopened.setEnabled(true, "operator:test");
+    assert.equal(reopened.usageSummary().safety.circuit.circuit_open, 0);
+    assert.equal(reopened.usageSummary().safety.incidents[0].closed_by, "operator:test");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("unsupported requests do not count as provider outages and malformed plans never become allowed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qa-ai-invalid-"));
+  try {
+    const { db, audit } = openStore(dir);
+    let calls = 0;
+    const gate = openAiGate(db, audit, { modelRouter: { async run() {
+      calls++;
+      if (calls <= 3) throw Object.assign(new Error("unsupported"), { code: "unsupported_request" });
+      return { provider: "fake", plan: { title: "Login essentials", scenarios: ["invented_case"] } };
+    } } });
+    for (let i = 0; i < 3; i++) await assert.rejects(gate.run("planLogin", {}, { requester: "operator:test", reason: "test" }), /unsupported/);
+    assert.equal(gate.usageSummary().safety.circuit.circuit_open, 0);
+    await assert.rejects(gate.run("planLogin", {}, { requester: "operator:test", reason: "test" }), (e) => e.code === "invalid_model_output");
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ai_gate_requests WHERE allowed=1").get().n, 0);
+    assert.equal(db.prepare("SELECT error_code FROM ai_gate_requests ORDER BY rowid DESC LIMIT 1").get().error_code, "invalid_model_output");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the hourly model budget blocks the next call, and a disabled operator switch survives migration", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qa-ai-budget-"));
+  try {
+    const { db, audit } = openStore(dir);
+    let calls = 0;
+    const gate = openAiGate(db, audit, { modelRouter: { async run() {
+      calls++;
+      return { provider: "fake", plan: { title: "Login essentials", scenarios: ["valid_login"] }, usage: { model: "fake", inputTokens: 1, outputTokens: 1 } };
+    } } });
+    for (let i = 0; i < 20; i++) await gate.run("planLogin", { intent: `bounded ${i}` }, { requester: "operator:test", reason: "test" });
+    await assert.rejects(gate.run("planLogin", { intent: "over budget" }, { requester: "operator:test", reason: "test" }), (e) => e.code === "request_budget");
+    assert.equal(calls, 20);
+    assert.equal(gate.usageSummary().safety.circuit.reason_code, "request_budget");
+    gate.setEnabled(false, "operator:test");
+    // Represent an existing v25 database with real Gate history and its own
+    // persisted OFF setting, then apply migration 26 through normal startup.
+    db.exec("DROP TABLE ai_decision_ledger; DROP TABLE ai_safety_incidents; DROP TABLE ai_residual_risks; DROP TABLE ai_safety_state");
+    db.prepare("DELETE FROM schema_migrations WHERE version=26").run();
+    const reopened = openStore(dir);
+    assert.equal(openAiGate(reopened.db, reopened.audit, { modelRouter: { async run() { throw new Error("must not run"); } } }).isEnabled(), false);
+    assert.equal(reopened.db.prepare("SELECT max(version) AS version FROM schema_migrations").get().version, 26);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

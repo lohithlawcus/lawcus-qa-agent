@@ -1,6 +1,6 @@
 # Operator guide
 
-**As of 26 September 2026, commit `262dcab`.** For the person who uses the tool. No programming needed.
+**As of 29 September 2026, commit `2529b3e` (baseline), with the later AI safety changes in this branch.** For the person who uses the tool. No programming needed.
 
 ## What this tool is, and is not
 
@@ -21,7 +21,7 @@ It is one Mac, one dedicated test account, one run at a time. It is not complete
 | --- | --- |
 | Test | Ask for a test in plain words, review the plan, run it. |
 | TestBook | Every check the tool knows, by feature, with its history. |
-| AI Usage | Every AI call, and the switch that turns AI use off. |
+| AI Usage | Every AI call, the human-controlled switch, safety incidents and residual risks. |
 | Run history | Every run and its evidence. Also where records left in staging are listed. |
 | Proposals | Changes the tool suggests (a new test, a locator change). Nothing applies until you approve it. |
 | Knowledge | Facts waiting for your approval, and the import box. |
@@ -100,6 +100,8 @@ Nothing here changes a fact or a test by itself.
 ## Only you can
 
 Approve a fact or a relationship, approve an API contract, decide whether a change is intentional, confirm a password rotation, and decide whether the tool may ever delete staging records. The tool and its MCP interface can only propose.
+
+If **AI Safety Pause** appears in AI Usage, read the listed incident and the ledger status before choosing **Review and enable AI**. A broken ledger cannot be reset from this screen. Re-enabling AI closes the circuit incident under your operator identity; it does not repair its underlying cause. Standard login checks and known deterministic plans still work while AI is paused.
 
 ## If something looks wrong
 
