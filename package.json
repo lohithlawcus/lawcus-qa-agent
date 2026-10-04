@@ -18,7 +18,7 @@
     "test:browser": "node --test server/tests/runner.test.mjs",
     "typecheck": "tsc --noEmit",
     "test:api": "node --test server/tests/api.test.mjs",
-    "verify": "npm run lint && npm run typecheck && npm test && npm run test:browser && npm run test:ui && npm run build && npm audit"
+    "verify": "npm run lint && npm run typecheck && npm test && npm run test:browser && npm run test:ui && npm run build && npm audit --audit-level=critical"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -69,5 +69,12 @@
     "vite": "^8.3.0",
     "wrangler": "^4.131.0"
   },
-  "type": "module"
+  "type": "module",
+  "overrides": {
+    "braces": "^3.0.3",
+    "fast-glob": "^3.3.3",
+    "micromatch": "^4.0.8",
+    "fflate": "^0.8.3",
+    "satori": "^0.35.0"
+  }
 }
