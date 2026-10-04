@@ -32,7 +32,10 @@ before(async () => {
   for (const port of [4319, 5173]) assert.ok(await portFree(port), `Port ${port} is in use: stop the running QA service or workspace before test:ui.`);
   scratch = mkdtempSync(join(tmpdir(), "qa-ui-"));
   service = spawn(process.execPath, [join(repo, "server/index.mjs")], { cwd: scratch, env });
-  app = spawn(process.execPath, [join(repo, "scripts/run-framework.mjs"), "dev", "--hostname", "127.0.0.1"], { cwd: repo, env });
+  // vinext 1.0.1 fully delegates to vite's own CLI, which renamed --hostname
+  // to --host (2026-10-04, surfaced by the dependency-security-fixes PR's
+  // npm audit fix bumping vinext within its existing ^1.0.0-beta.9 range).
+  app = spawn(process.execPath, [join(repo, "scripts/run-framework.mjs"), "dev", "--host", "127.0.0.1"], { cwd: repo, env });
   for (const child of [service, app]) for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => { logs += d; });
   await waitFor("http://127.0.0.1:4319/session", "The service");
   await waitFor(APP + "/", "The workspace");
