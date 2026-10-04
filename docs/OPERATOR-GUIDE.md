@@ -97,6 +97,15 @@ When Lawcus changes (a release note, a requirement, something a tester noticed):
 
 Nothing here changes a fact or a test by itself.
 
+## Showing the tool a workflow
+
+1. In **Teach / Record**, choose the environment, name the feature and describe what you'll do, then press **Start recording**. A separate, visible Chromium window opens, signed in — perform the workflow there yourself.
+2. A small round button floats in that window. It starts as **○ Start teaching**: nothing you do yet is kept. Click it right before the steps you actually want taught — it turns into a red dot, and expands to **● Teaching ON — click to stop** when you hover over it. Click it again when you're done with those steps; you can turn it on and off as many times as you like in one session.
+3. Drag the button anywhere if it's sitting on top of something you need to click. It stays where you put it for the rest of the session.
+4. Come back here and press **Finish & create proposals**. Only what you did while the marker was on becomes a proposal — `NEW_PRIMITIVE` for anything not already automated, `TESTABILITY_HOOK_REQUEST` for an element with no stable locator. Review them like any other proposal; nothing here is ever trusted or run automatically.
+
+A recording session is not restricted the way a real check is: it can reach anything Lawcus itself would load, because you are the one driving it, exactly as you could in an ordinary browser. That trust does not extend past the session — what comes out is still only ever a proposal.
+
 ## Only you can
 
 Approve a fact or a relationship, approve an API contract, decide whether a change is intentional, confirm a password rotation, and decide whether the tool may ever delete staging records. The tool and its MCP interface can only propose.

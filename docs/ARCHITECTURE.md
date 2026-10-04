@@ -53,6 +53,8 @@ Every staging browser context restricts requests before they leave the machine, 
 
 The policies are in `live-runner.mjs` (`permit*` functions). They are defense in depth, not an operating-system sandbox.
 
+**Teach / Record is the one deliberate exception.** A recording session has no `permit*` policy and no pinned-egress proxy — by the operator's explicit decision, 2026-10-05. Every policy above restricts an *automated* script; a recording session is a person physically watching and driving the browser themselves, free to do anything they could do in Lawcus in an ordinary browser regardless of this tool. What a session produces is still never trusted or executed automatically: it only becomes a `NEW_PRIMITIVE`/`NEW_TEST`/`TESTABILITY_HOOK_REQUEST` proposal, reviewed like any other. Within a session, the operator brackets which actions matter with an in-page "Start/Stop teaching" marker (`recorder.mjs`): everything is observed, but only actions performed while the marker is on are ever recorded, so finding the right screen doesn't itself become a proposal. The marker is draggable and remembers where it was dragged to across navigations within the session (never persisted past the session).
+
 ## Records a check creates
 
 `resource-ownership.mjs` records each record a check creates as soon as its id is known, and records a "may exist" leftover when a create was clicked but never confirmed. Cleanup is **report-only**: the cleanup runner is given no delete handlers, so nothing is deleted. Leftovers are listed for a person to resolve. Protected fixture records can never be recorded as created. The sweep looks for QA-named records the local records do not know about.
