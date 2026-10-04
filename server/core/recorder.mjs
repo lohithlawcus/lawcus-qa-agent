@@ -222,6 +222,106 @@ const IN_PAGE_RECORDER_SCRIPT = `(() => {
     const el = e.target;
     if (el) report('submit', el, {});
   }, true);
+
+  // 2026-10-05: "Teaching" marker, by the operator's explicit decision —
+  // navigating/exploring to find the right screen should not itself become
+  // a proposal, only the steps the operator deliberately brackets. The
+  // actual filtering happens server-side (attachRecorder below checks this
+  // before ever pushing an action), so a navigation that re-runs this whole
+  // script can't silently lose or duplicate anything; this button only
+  // toggles that server-side flag and reflects its current value, read back
+  // from it on every fresh page. Rendered in a closed shadow root — on a
+  // real Lawcus page, not a sandbox — so its own click is never itself
+  // mistaken for a recorded action (closest() can't reach into a closed
+  // shadow root from the document listener above) and its styling can
+  // never collide with the host page's.
+  //
+  // Draggable (the operator asked: it was sitting on top of real page
+  // buttons), with its position remembered across navigations the same way
+  // the teaching flag itself is — via __qaGet/SetMarkerPosition, Node-side
+  // state, not anything stored in this page. While teaching is ON it
+  // collapses to a small dot (it's no longer something to act on moment to
+  // moment, just a reminder it's running) and expands back to the full
+  // "stop" button on hover, so stopping stays one obvious click away.
+  (function renderTeachingMarker() {
+    function mount() {
+      const host = document.createElement('div');
+      host.style.cssText = 'all:initial;position:fixed;top:12px;right:12px;z-index:2147483647;';
+      const shadow = host.attachShadow({ mode: 'closed' });
+      const style = document.createElement('style');
+      style.textContent = [
+        '.marker{all:initial;position:relative;display:flex;align-items:center;cursor:grab;',
+        '  box-shadow:0 2px 10px rgba(0,0,0,.3);transition:width .15s ease,height .15s ease,padding .15s ease;',
+        '  font:600 13px system-ui,sans-serif;user-select:none;touch-action:none;border-radius:999px;box-sizing:border-box;}',
+        '.marker:active{cursor:grabbing}',
+        '.marker.off{padding:8px 14px;border:2px solid #0f7d3f;background:#ffffff;color:#0f7d3f;white-space:nowrap;}',
+        '.marker.on{width:16px;height:16px;padding:0;border:2px solid #b3261e;background:#e5483f;overflow:hidden;white-space:nowrap;}',
+        '.marker.on:hover,.marker.on.dragging{width:auto;height:auto;padding:8px 14px;border:2px solid #b3261e;background:#e5483f;color:#ffffff;}',
+        '.marker.on .label{display:none}',
+        '.marker.on:hover .label,.marker.on.dragging .label{display:inline}',
+      ].join('');
+      shadow.appendChild(style);
+      const btn = document.createElement('button');
+      btn.className = 'marker off';
+      const label = document.createElement('span');
+      label.className = 'label';
+      btn.appendChild(label);
+      shadow.appendChild(btn);
+
+      let teaching = false;
+      function render() {
+        btn.className = 'marker ' + (teaching ? 'on' : 'off');
+        label.textContent = teaching ? '\\u25CF Teaching ON \\u2014 click to stop' : '\\u25CB Start teaching';
+      }
+      render();
+      window.__qaGetTeaching().then((value) => { teaching = Boolean(value); render(); }).catch(() => {});
+
+      // Positioning: top/right by default (matches the very first version);
+      // switches to an explicit left/top pixel position, clamped to the
+      // viewport, the first time it's dragged, and is restored from the
+      // last known position on every later page in this session.
+      function applyPosition(pos) {
+        if (!pos) return;
+        const w = host.getBoundingClientRect().width || 40, h = host.getBoundingClientRect().height || 32;
+        const x = Math.max(4, Math.min(window.innerWidth - w - 4, pos.x));
+        const y = Math.max(4, Math.min(window.innerHeight - h - 4, pos.y));
+        host.style.left = x + 'px'; host.style.top = y + 'px'; host.style.right = 'auto';
+      }
+      window.__qaGetMarkerPosition().then(applyPosition).catch(() => {});
+
+      let dragging = false, moved = false, startX = 0, startY = 0, originX = 0, originY = 0;
+      btn.addEventListener('pointerdown', (e) => {
+        dragging = true; moved = false;
+        startX = e.clientX; startY = e.clientY;
+        const rect = host.getBoundingClientRect();
+        originX = rect.left; originY = rect.top;
+        try { btn.setPointerCapture(e.pointerId); } catch {}
+      });
+      btn.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX, dy = e.clientY - startY;
+        if (!moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) { moved = true; btn.classList.add('dragging'); }
+        if (moved) applyPosition({ x: originX + dx, y: originY + dy });
+      });
+      btn.addEventListener('pointerup', async (e) => {
+        dragging = false;
+        try { btn.releasePointerCapture(e.pointerId); } catch {}
+        btn.classList.remove('dragging');
+        if (moved) {
+          const rect = host.getBoundingClientRect();
+          window.__qaSetMarkerPosition(rect.left, rect.top).catch(() => {});
+          return;
+        }
+        // Not a drag — a real click: toggle teaching.
+        try { teaching = await window.__qaSetTeaching(!teaching); } catch { teaching = !teaching; }
+        render();
+      });
+
+      document.documentElement.appendChild(host);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
+    else mount();
+  })();
 })();`;
 
 /** Installs the in-page listeners above on every current/future page in
@@ -232,7 +332,16 @@ const IN_PAGE_RECORDER_SCRIPT = `(() => {
 export async function attachRecorder(context, { personaLabel = null } = {}) {
   const actions = [];
   let sequence = 0;
+  // Off by default: exploring/navigating to find the right screen before
+  // the operator marks "Start teaching" must never itself become a
+  // proposal. This one flag is the actual filter — the in-page button
+  // (IN_PAGE_RECORDER_SCRIPT) only ever calls __qaSetTeaching to change it
+  // and __qaGetTeaching to reflect it; every action is still reported up
+  // from the page regardless of this flag, and is only kept here while
+  // teaching is on, so a slow page load can never drop a real action.
+  let teaching = false;
   await context.exposeBinding("__qaRecordAction", (_source, payload) => {
+    if (!teaching) return;
     const classification = payload.redacted
       ? classifyValue({ fieldType: payload.fieldType, fieldName: payload.fieldName, fieldLabel: payload.fieldLabel, personaLabel })
       : { redacted: false };
@@ -247,9 +356,24 @@ export async function attachRecorder(context, { personaLabel = null } = {}) {
       valueReference: classification.reference ?? null,
     });
   });
+  await context.exposeBinding("__qaSetTeaching", (_source, value) => {
+    teaching = Boolean(value);
+    return teaching;
+  });
+  await context.exposeBinding("__qaGetTeaching", () => teaching);
+  // Remembers where the operator last dragged the marker to, so it doesn't
+  // jump back on top of a button again after the next navigation. Node-side,
+  // like `teaching` above — never stored in the page, so a fresh document's
+  // copy of IN_PAGE_RECORDER_SCRIPT can read it straight back.
+  let markerPosition = null;
+  await context.exposeBinding("__qaSetMarkerPosition", (_source, x, y) => {
+    markerPosition = { x, y };
+  });
+  await context.exposeBinding("__qaGetMarkerPosition", () => markerPosition);
   await context.addInitScript(IN_PAGE_RECORDER_SCRIPT);
   return {
     actions,
+    isTeaching: () => teaching,
     dispose() {
       // exposeBinding cannot be removed once added; a disposed recorder
       // just stops being read by the caller. The context itself is always

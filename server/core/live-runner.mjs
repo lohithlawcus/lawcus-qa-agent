@@ -439,20 +439,36 @@ export async function verifyPersonaInBrowser({personas,personaId,artifactDirecto
 }
 
 // V5 Step 14 / section 29.1 — Controlled Codegen context. Opens a real,
-// visible Chromium window the operator manually performs a workflow in,
-// with the SAME environment/network policy every trusted run already
-// uses — never an unrestricted browser. Stays open (unlike every other
-// function in this file) until the caller explicitly calls finish() or
-// abort(), because recording is an open-ended human activity, not a
-// bounded scripted scenario.
+// visible Chromium window the operator manually performs a workflow in.
+//
+// 2026-10-05: previously restricted to permitLiveRequest (the LOGIN
+// suite's policy — login/logout only), inherited by accident rather than
+// chosen for this use. The first real recording attempt against staging
+// hit it immediately: creating a Contact failed with "Network error
+// detected" because POST /contacts, the Maps script and static icons
+// were all blocked client-side, Lawcus's own UI unable to tell it wasn't
+// a real network problem. Every other function in this file restricts an
+// AUTOMATED script's writes — that model doesn't apply here, where a
+// person is physically watching and performing every single action
+// themselves, exactly as free to do so in an ordinary browser outside
+// this tool entirely. By the operator's explicit decision: no network
+// restriction and no pinned-egress proxy for a recording session against
+// real staging — same as the fixture branch always had. What a session
+// produces is still never trusted or executed automatically — review in
+// Proposals is still required for every captured action before anything
+// becomes a test. (Filtering captured actions down to only the ones that
+// match the operator's stated workflow, so an aside doesn't also become a
+// proposal, is a separate, not-yet-built piece — see buildProposalSpecs
+// in recorder.mjs, which currently proposes from every captured action.)
+//
+// Stays open (unlike every other function in this file) until the caller
+// explicitly calls finish() or abort(), because recording is an
+// open-ended human activity, not a bounded scripted scenario.
 export async function startAuthoringSession({environmentId,origin,personaId=null,personas=null,personaDirectory}){
  let browser,proxy,context;
  try{
-  if(environmentId==='lawcus'){
-   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
-  }else if(environmentId!=='fixture'){
+  if(environmentId!=='lawcus'&&environmentId!=='fixture')
    throw new Error('Unknown environment for an authoring session.');
-  }
   browser=await launch(proxy,false);
   let storageState;
   if(personaId){
@@ -463,18 +479,16 @@ export async function startAuthoringSession({environmentId,origin,personaId=null
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,...(storageState?{storageState}:{})});
   context.setDefaultTimeout(20000);context.setDefaultNavigationTimeout(25000);
   await context.routeWebSocket(/.*/,socket=>socket.close());
-  if(environmentId==='lawcus')
-   await context.route('**/*',async route=>{
-    if(!permitLiveRequest(route.request().url(),route.request().method(),route.request().resourceType())){await route.abort('blockedbyclient');return;}
-    await route.continue();
-   });
+  // Deliberately no permit*/route() gate and no startEgress proxy here — see
+  // this function's own comment above for why a recording session is not
+  // restricted the way every automated check in this file is.
   const recorder=await attachRecorder(context,{personaLabel:personaId?'persona':null});
   const observer=attachNetworkObserver(context);
   const page=await context.newPage();
   page.on('dialog',d=>void d.dismiss());
   await page.goto((environmentId==='lawcus'?STAGING:origin)+(storageState?'':'/login'),{waitUntil:'domcontentloaded'});
   return {
-   status(){return {actionCount:recorder.actions.length,networkCount:observer.events.length};},
+   status(){return {actionCount:recorder.actions.length,networkCount:observer.events.length,teaching:recorder.isTeaching()};},
    async finish(){
     const actions=[...recorder.actions];
     const networkEvents=[...observer.events];
