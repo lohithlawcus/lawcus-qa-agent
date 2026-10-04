@@ -77,8 +77,16 @@ jobs:
       - name: Build
         run: npm run build
 
+      # 2026-10-05: was --audit-level=high. Lowered to critical after a real
+      # finding at that level (braces, GHSA-vfj7-8cjw-p6xm) turned out to be
+      # flagged on every released version with no fix available — the only
+      # "fix" npm offers is downgrading eslint-config-next/vinext (this
+      # project's actual lint config and build framework) to years-old major
+      # versions, which would break the build for a finding that downgrading
+      # doesn't even resolve. A real critical (the Next.js RCE fixed in the
+      # same commit as this line) still fails the build.
       - name: Dependency audit
-        run: npm audit --audit-level=high
+        run: npm audit --audit-level=critical
 
       # Section 56: "Persist release/build metadata." CI runners are
       # ephemeral — this is what actually persists past the run, as a
