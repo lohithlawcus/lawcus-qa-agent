@@ -25,6 +25,15 @@ type Setup = {
   storage: string;
 };
 const API = "http://127.0.0.1:4319";
+
+// The same fixed list the service uses (server/ai/providers/catalog.mjs). It is shown even
+// when the Keychain status cannot be read, so the picker always has its options; the
+// "key saved" labels come from the status only.
+const AI_PROVIDER_OPTIONS = [
+  { id: "openai", label: "OpenAI", keyPage: "https://platform.openai.com/api-keys", defaultModel: "gpt-4.1-mini" },
+  { id: "openrouter", label: "OpenRouter", keyPage: "https://openrouter.ai/keys", defaultModel: "openai/gpt-4.1-mini" },
+  { id: "anthropic", label: "Anthropic", keyPage: "https://console.anthropic.com/settings/keys", defaultModel: "claude-sonnet-4-5" },
+];
 async function call(
   path: string,
   body?: unknown,
@@ -282,7 +291,10 @@ export default function SecureSetup({
         })}
         <div className="panel" style={{ padding: 22 }}>
           {(() => {
-            const providers = status?.aiProviders ?? [];
+            const providers = AI_PROVIDER_OPTIONS.map((option) => ({
+              ...option,
+              configured: Boolean(status?.aiProviders?.find((p) => p.id === option.id)?.configured),
+            }));
             const chosen = providers.find((p) => p.id === aiProvider);
             const active = status?.aiChoice;
             const activeLabel = providers.find((p) => p.id === active?.provider)?.label;
@@ -303,7 +315,7 @@ export default function SecureSetup({
                 <p className="subtle">
                   {chosen && (
                     <>
-                      Create a {chosen.label} key on{" "}
+                      Get a key from{" "}
                       <a href={chosen.keyPage} target="_blank" rel="noreferrer" style={{ textDecoration: "underline" }}>
                         {chosen.label}&rsquo;s API keys page
                       </a>
