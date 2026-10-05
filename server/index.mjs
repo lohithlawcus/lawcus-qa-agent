@@ -10,6 +10,9 @@ import { summarizeBody } from './core/sanitize.mjs';
 import { createModelRouter, recordModelUsage } from './ai/router.mjs';
 import { openAiGate } from './ai/gate.mjs';
 import { createOpenAIProvider } from './ai/providers/openai.mjs';
+import { createChatCompatibleProvider } from './ai/providers/chat-compatible.mjs';
+import { AI_PROVIDER_IDS, AI_PROVIDERS } from './ai/providers/catalog.mjs';
+import { readAiSettings, writeAiSettings } from './ai/settings.mjs';
 import {keychain, readSecret} from './core/secrets.mjs';
 import {openEvidence} from './core/setup.mjs';
 import {readFile} from 'node:fs/promises';
@@ -73,8 +76,14 @@ const testbook = openTestBook(db, audit);
 // task (server/ai/router.mjs's TASK_POLICY). Only OpenAI is registered:
 // adding a second provider means writing one more server/ai/providers/*
 // module and one more line here, never touching a call site.
+// The provider and model come from the saved choice in ai-settings.json (set in
+// secure setup); the keys stay in the Keychain. Every provider is fixed in
+// server/ai/providers/catalog.mjs, so a key only ever goes to its own base URL.
+const providers = { openai: createOpenAIProvider() };
+for (const id of AI_PROVIDER_IDS) if (id !== 'openai') providers[id] = createChatCompatibleProvider({ providerId: id });
 const modelRouter = createModelRouter({
-  providers: { openai: createOpenAIProvider() },
+  providers,
+  policy: { get planLogin() { const saved = readAiSettings(directory); return { provider: saved.provider, model: saved.model }; } },
 });
 // V5 Upgrade Phase U1 — the AI Gate wraps modelRouter; no other module
 // may import router.mjs's run() directly from here on. See
@@ -373,7 +382,11 @@ const server = createServer(
           .catch(error=>{connection={status:'failed',message:error instanceof Error&&error.message.length<200?error.message:'Visible sign-in could not be verified. The saved account was not updated.'};});
         json(res,202,connection);return;
       }
-      if(req.method==='GET'&&pathname==='/setup/status'){json(res,200,await setupStatus());return;}
+      if(req.method==='GET'&&pathname==='/setup/status'){
+        const status=await setupStatus();
+        json(res,200,{...status,aiChoice:readAiSettings(directory),aiProviders:AI_PROVIDER_IDS.map(id=>({id,label:AI_PROVIDERS[id].label,configured:Boolean(status.aiProviderConfigured[id]),keyPage:AI_PROVIDERS[id].keyPage,defaultModel:AI_PROVIDERS[id].defaultModel}))});
+        return;
+      }
       if(req.method==='POST'&&pathname==='/setup/credentials'){
         const input=CredentialSetup.parse(await body(req));
         // V5 Step 12 / section 18: a persona's whole point is a VERIFIED
@@ -383,7 +396,7 @@ const server = createServer(
         // after Playwright itself confirms the resulting identity.
         if(input.kind==='lawcus-persona'){json(res,400,{error:'Persona accounts must be verified through visible sign-in, not saved directly.'});return;}
         if(connecting()||savingCredentials||stagingBusy(db)){json(res,409,{error:'Wait for the active operation before changing credentials.'});return;}
-        savingCredentials=true;try{const result=await saveCredentials(input);audit('setup.credential-saved',input.kind,{storage:'macOS Keychain',...(input.kind==='lawcus'?{environmentId:input.environmentId}:input.kind==='lawcus-persona'?{account:input.account}:{})});json(res,200,result);}finally{savingCredentials=false;}return;
+        savingCredentials=true;try{const result=await saveCredentials(input);if(input.kind==='ai')writeAiSettings(directory,{provider:input.provider,model:input.model});audit('setup.credential-saved',input.kind,{storage:'macOS Keychain',...(input.kind==='lawcus'?{environmentId:input.environmentId}:input.kind==='lawcus-persona'?{account:input.account}:{})});json(res,200,result);}finally{savingCredentials=false;}return;
       }
       if(req.method==='POST'&&pathname==='/personas'){
         const input=PersonaRegistration.parse(await body(req));

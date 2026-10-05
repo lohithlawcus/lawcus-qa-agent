@@ -20,6 +20,8 @@ type Setup = {
   loginConfigured: boolean;
   loginConfiguredByEnvironment?: Record<string, boolean>;
   aiConfigured: boolean;
+  aiChoice?: { provider: string; model: string };
+  aiProviders?: { id: string; label: string; configured: boolean; keyPage: string; defaultModel: string }[];
   storage: string;
 };
 const API = "http://127.0.0.1:4319";
@@ -69,6 +71,8 @@ export default function SecureSetup({
   const [connection, setConnection] = useState<{ status: string; message: string } | null>(null);
   const [status, setStatus] = useState<Setup | null>(null);
   const [busy, setBusy] = useState("");
+  const [aiProvider, setAiProvider] = useState("openai");
+  const [aiModel, setAiModel] = useState("gpt-4.1-mini");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -157,15 +161,20 @@ export default function SecureSetup({
     }
   }
 
-  async function saveOpenAi(event: React.FormEvent<HTMLFormElement>) {
+  async function saveAi(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    setBusy("openai");
+    setBusy("ai");
     setError("");
     setMessage("");
     try {
-      const result = await call("/setup/credentials", { kind: "openai", apiKey: data.get("apiKey") });
+      const result = await call("/setup/credentials", {
+        kind: "ai",
+        provider: aiProvider,
+        model: aiModel.trim(),
+        apiKey: data.get("apiKey"),
+      });
       form.reset();
       setMessage(result.message || "Saved.");
       await refresh();
@@ -272,29 +281,69 @@ export default function SecureSetup({
           );
         })}
         <div className="panel" style={{ padding: 22 }}>
-          <div className="panel-heading">
-            <div>
-              <span className="section-label">AI PLANNER</span>
-              <h2>{status?.aiConfigured ? "OpenAI key saved" : "Connect OpenAI"}</h2>
-            </div>
-            {status?.aiConfigured && <Badge variant="outline">Configured</Badge>}
-          </div>
-          <p className="subtle">
-            Create a key on{" "}
-            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" style={{ textDecoration: "underline" }}>
-              OpenAI&rsquo;s API keys page
-            </a>
-            . API billing must be enabled. Only your test intent and a bounded login-testing contract
-            are sent for planning; no page contents or staging credentials are sent.
-          </p>
-          <form onSubmit={saveOpenAi} autoComplete="off" style={{ marginTop: 18 }}>
-            <label htmlFor="openai-key">OpenAI API key</label>
-            <Input id="openai-key" name="apiKey" type="password" required autoComplete="new-password" placeholder="sk-…" style={{ margin: "7px 0 14px" }} />
-            <Button type="submit" disabled={!!busy}>
-              {busy === "openai" ? <LoaderCircle className="spin" /> : <ShieldCheck />}
-              Save API key securely
-            </Button>
-          </form>
+          {(() => {
+            const providers = status?.aiProviders ?? [];
+            const chosen = providers.find((p) => p.id === aiProvider);
+            const active = status?.aiChoice;
+            const activeLabel = providers.find((p) => p.id === active?.provider)?.label;
+            return (
+              <>
+                <div className="panel-heading">
+                  <div>
+                    <span className="section-label">AI PLANNER</span>
+                    <h2>{activeLabel ? `Planning with ${activeLabel}` : "Connect an AI provider"}</h2>
+                  </div>
+                  {status?.aiConfigured && <Badge variant="outline">Configured</Badge>}
+                </div>
+                {active && (
+                  <p className="subtle">
+                    Current model: <code>{active.model}</code>. Keys for other providers stay saved; choose one below to switch.
+                  </p>
+                )}
+                <p className="subtle">
+                  {chosen && (
+                    <>
+                      Create a {chosen.label} key on{" "}
+                      <a href={chosen.keyPage} target="_blank" rel="noreferrer" style={{ textDecoration: "underline" }}>
+                        {chosen.label}&rsquo;s API keys page
+                      </a>
+                      .{" "}
+                    </>
+                  )}
+                  Your key is sent only to that provider&rsquo;s own address. Only your test intent and a bounded login-testing contract
+                  are sent for planning; no page contents or staging credentials are sent.
+                </p>
+                <form onSubmit={saveAi} autoComplete="off" style={{ marginTop: 18 }}>
+                  <label htmlFor="ai-provider">Provider</label>
+                  <select
+                    id="ai-provider"
+                    value={aiProvider}
+                    onChange={(e) => {
+                      const next = providers.find((p) => p.id === e.target.value);
+                      setAiProvider(e.target.value);
+                      if (next) setAiModel(next.defaultModel);
+                    }}
+                    style={{ display: "block", width: "100%", margin: "7px 0 14px", padding: "8px 10px", borderRadius: 8 }}
+                  >
+                    {providers.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                        {p.configured ? " (key saved)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <label htmlFor="ai-model">Model name</label>
+                  <Input id="ai-model" name="model" value={aiModel} onChange={(e) => setAiModel(e.target.value)} required style={{ margin: "7px 0 14px" }} />
+                  <label htmlFor="ai-key">{chosen ? `${chosen.label} API key` : "API key"}</label>
+                  <Input id="ai-key" name="apiKey" type="password" required autoComplete="new-password" placeholder="Paste your key" style={{ margin: "7px 0 14px" }} />
+                  <Button type="submit" disabled={!!busy || !aiModel.trim()}>
+                    {busy === "ai" ? <LoaderCircle className="spin" /> : <ShieldCheck />}
+                    Save key and use this provider
+                  </Button>
+                </form>
+              </>
+            );
+          })()}
         </div>
       </div>
 
