@@ -88,3 +88,13 @@ test('the Keychain helper and the Node allowlist name the same accounts (or the 
  for(const id of AI_PROVIDER_IDS)assert.ok(nodeList.includes(AI_PROVIDERS[id].account),`${AI_PROVIDERS[id].account} missing from secrets.mjs`);
  for(const account of nodeList.filter(a=>!a.startsWith('lawcus-persona')))assert.ok(swiftList.includes(account),`${account} missing from Keychain.swift`);
 });
+
+test('a request outside the login checks shows the model\'s clarification, not a generic error',async()=>{
+ const provider=createChatCompatibleProvider({providerId:'huggingface',getSecret:async()=>SYNTHETIC_KEY,request:async()=>chatReply({title:'Login essentials',scenarios:[],summary:'',clarification:'Creating a person contact is not one of the login checks.'})});
+ await assert.rejects(provider.planLogin({intent:'Test the cases for creating person type contact'},{model:'m'}),/Creating a person contact is not one of the login checks/);
+});
+
+test('an AI answer in the wrong shape is reported as a format problem, not as an invalid request',async()=>{
+ const provider=createChatCompatibleProvider({providerId:'huggingface',getSecret:async()=>SYNTHETIC_KEY,request:async()=>chatReply({title:'Contacts',scenarios:['create_person'],summary:'x',clarification:''})});
+ await assert.rejects(provider.planLogin({intent:'Test a valid login'},{model:'m'}),/did not match the login plan format/);
+});
