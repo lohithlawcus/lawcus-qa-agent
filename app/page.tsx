@@ -622,8 +622,8 @@ export default function Home() {
                   <Badge className="status failed" variant="outline">
                     still in staging
                   </Badge>
-                  <Button variant="outline" onClick={() => resolveLeftover(r.id, "removed")}>
-                    I removed it
+                  <Button variant="outline" onClick={() => resolveLeftover(r.id, "removed")} title="Records that you already deleted it in Lawcus. This does not delete anything.">
+                    Mark as removed in Lawcus
                   </Button>
                   <Button variant="outline" onClick={() => resolveLeftover(r.id, "keep")}>
                     Keep it
@@ -1178,7 +1178,7 @@ export default function Home() {
                       renderOwned(
                         detail.resourceOwnership,
                         "RECORDS THIS RUN CREATED",
-                        "This app never deletes anything from Lawcus. Remove any that are still there yourself, then mark them here.",
+                        "Deleting in Lawcus is not done by this app. Remove any that are still there yourself, then mark them here. Marking never deletes anything.",
                       )}
                     <div className="scenario-list">
                       {detail.results.map((r) => (
@@ -1672,7 +1672,7 @@ export default function Home() {
               ? renderOwned(
                   state.leftovers,
                   `RECORDS LEFT IN STAGING (${state.leftovers.length})`,
-                  "Created by test runs and still in Lawcus. This app never deletes them: remove them in Lawcus, then mark them here.",
+                  "Created by test runs and still in Lawcus. Use the \"Records the tool created\" panel above to approve and delete one at a time. Or delete it in Lawcus yourself and mark it as removed here. Marking never deletes anything.",
                 )
               : null}
             <div className="panel">

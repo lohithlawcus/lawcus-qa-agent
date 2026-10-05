@@ -73,7 +73,7 @@ Open a run in **Run history** to see its results, screenshots and traces. Screen
 
 Some checks create records in Lawcus (a contact, a lead, a matter). The tool writes each one down as soon as it exists. It **does not delete them on its own**; deleting one is a decision for you, and the approval path that would allow it is designed but not yet available.
 
-- In **Run history**, **Records left in staging** lists what runs created and Lawcus still holds. Remove a record in Lawcus yourself, then press **I removed it**; or press **Keep it** if it should stay.
+- In **Run history**, **Records left in staging** lists what runs created and Lawcus still holds. Remove a record in Lawcus yourself, then press **Mark as removed in Lawcus**. That only records what you did and never deletes anything. Or press **Keep it** if it should stay. To have the tool delete a record, approve it in **Records the tool created** and use **Delete one approved record**.
 - If a create was clicked but never confirmed, a "may exist" entry tells you what name to search for.
 
 **The staging sweep** (Environment tab, **Sweep now**) reads the tenant's Contacts, Matters and Leads lists and shows records whose names match this tool's naming (`QA Agent …`, `QA Matter …`, `QAFieldTest…`, `QA Batch …`, `QA impacted-test …`) that the tool has no record of. It changes nothing and copies nobody else's records. A matching name is only a **candidate**: mark each one **Ours**, **Not ours** or **Leave in place**. It sees open matters only.
