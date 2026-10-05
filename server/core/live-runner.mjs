@@ -15,7 +15,7 @@ import {STAGING,API_ORIGIN,ASSETS,ENVIRONMENT_ORIGINS,resolveEnvironmentOrigins}
 export {STAGING,API_ORIGIN,ASSETS};
 import {attachNetworkObserver,correlateObservation} from './network-observer.mjs';
 import {attachRecorder} from './recorder.mjs';
-import {updateAndRestoreContactCustomFieldViaBrowser,createContactViaBrowser,createCompanyContactViaBrowser,createContactAllFieldsViaBrowser,verifyPhoneNumberValidationViaBrowser,verifyBillingRateRequiredValidationViaBrowser,verifyMandatoryFieldValidationViaBrowser,verifyMandatoryFieldValidationCompanyViaBrowser,VIEWPORT as CONTACTS_VIEWPORT} from './contacts-browser.mjs';
+import {updateAndRestoreContactCustomFieldViaBrowser,createContactViaBrowser,createCompanyContactViaBrowser,createContactAllFieldsViaBrowser,verifyPhoneNumberValidationViaBrowser,verifyBillingRateRequiredValidationViaBrowser,verifyMandatoryFieldValidationViaBrowser,verifyMandatoryFieldValidationCompanyViaBrowser,deleteContactViaBrowser,VIEWPORT as CONTACTS_VIEWPORT} from './contacts-browser.mjs';
 import {updateAndRestoreLeadCustomFieldViaBrowser,createLeadViaBrowser,verifyLeadMandatoryFieldValidationViaBrowser,VIEWPORT as LEADS_VIEWPORT} from './leads-browser.mjs';
 import {ApiContractError} from './api-contracts.mjs';
 import {CheckAssertionError,classifyLoginFailure,classifyReportedFailure,classifyThrown,EVIDENCE_SAVE_FAILED} from './failure-class.mjs';
@@ -87,6 +87,19 @@ export function permitContactsRequest(url,method,resourceType,postData){
   try{const body=JSON.parse(postData||'');return body&&typeof body==='object'&&'pagination'in body;}catch{return false;}
  }
  return false;
+}
+// Deleting a contact the tool created and a person approved (see
+// resource-ownership.mjs's approveDeletion). Adds exactly one request shape
+// to the contacts policy: DELETE /contacts/{uuid}, captured live 2026-10-05
+// from the Lawcus UI's own Delete action. Nothing else is widened. Which
+// uuid may actually be deleted is decided by the handler (deleteContactViaBrowser),
+// not here: it refuses protected fixtures and any uuid whose page does not
+// show the approved record's name.
+export function permitContactsDeleteRequest(url,method,resourceType,postData){
+ if(permitContactsRequest(url,method,resourceType,postData))return true;
+ let u;try{u=new URL(url);}catch{return false;}
+ if(u.protocol!=='https:'||u.username||u.password||u.port||u.origin!==API_ORIGIN)return false;
+ return method==='DELETE'&&/^\/contacts\/[a-f0-9-]{36}$/.test(u.pathname);
 }
 // V5 Step 15 — same shape as permitContactsRequest, but for Leads: the
 // real lawcus.leads.update call is PUT /leads with no :uuid in the path
@@ -648,6 +661,15 @@ async function withLoggedInContext(permit,work,{viewport=CONTACTS_VIEWPORT}={}){
  }
 }
 const withLoggedInMatterContext=work=>withLoggedInContext(permitMattersRequest,work);
+// Delete handlers for resource-ownership's approved deletions (cleanup.mjs's
+// runApprovedDeletions). Each runs one signed-in session per approved record,
+// using the contacts policy plus the single DELETE shape above. A record whose
+// type has no handler here is left approved and pending, never deleted.
+export function lawcusDeleteHandlers(){
+ return {
+  contact:resource=>withLoggedInContext(permitContactsDeleteRequest,context=>deleteContactViaBrowser({context,uuid:resource.resource_id,expectedName:resource.display_name})),
+ };
+}
 /** Creates a QA Person contact, then a Matter for it, in ONE signed-in session.
  * `onCreated(kind, uuid)` fires as soon as each record exists so a caller can
  * record ownership even if a later step throws. */

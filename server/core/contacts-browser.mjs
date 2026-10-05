@@ -967,3 +967,64 @@ export async function updateAndRestoreContactCustomFieldViaBrowser({
     journalEntry,
   };
 }
+
+// Deleting a contact in Lawcus. Captured live on 2026-10-05 from the UI's own
+// flow: More actions → Delete → a confirmation that must have its "I
+// understand" checkbox ticked → DELETE /contacts/{uuid} (200).
+
+/** Pure guard, tested without a browser. Returns null when the uuid may be
+ * deleted, otherwise the reason it may not. */
+export function refuseContactDeletion({ uuid, expectedName, protectedIds = [] }) {
+  if (typeof uuid !== "string" || !/^[a-f0-9-]{36}$/.test(uuid)) return "The contact id is not a valid uuid.";
+  if (protectedIds.includes(uuid)) return "This contact is a protected QA fixture and can never be deleted.";
+  if (typeof expectedName !== "string" || expectedName.trim().length < 5) return "No approved record name was recorded for this contact, so it cannot be verified before deleting.";
+  return null;
+}
+
+/** Deletes one approved contact through the Lawcus UI. Refuses unless the
+ * contact's own page shows the name recorded when the tool created it, so
+ * a reused or wrong id can never be deleted. Verifies the contact is gone
+ * afterwards. Throws on any failure, so the cleanup runner records it. */
+export async function deleteContactViaBrowser({ context, uuid, expectedName, protectedIds = ["e2bf71a0-ae87-11f1-ab8e-f18331cbd381"] }) {
+  const refusal = refuseContactDeletion({ uuid, expectedName, protectedIds });
+  if (refusal) throw new Error(refusal);
+  const page = await context.newPage();
+  let deleteStatus = null;
+  const onResponse = (resp) => {
+    if (resp.request().method() === "DELETE" && new URL(resp.url()).pathname === `/contacts/${uuid}`) deleteStatus = resp.status();
+  };
+  context.on("response", onResponse);
+  try {
+    page.on("dialog", async (d) => {
+      if (/delete/i.test(d.message())) await d.accept();
+      else await d.dismiss();
+    });
+    await page.goto(`${STAGING}/contact/${uuid}`, { waitUntil: "domcontentloaded" });
+    for (let i = 0; i < 40 && !(await page.locator("body").innerText()).includes(expectedName); i++) await page.waitForTimeout(500);
+    if (!(await page.locator("body").innerText()).includes(expectedName))
+      throw new Error("Refused: the contact's page does not show the approved record's name, so nothing was deleted.");
+    await page.getByRole("button", { name: /more actions/i }).first().click();
+    await page.waitForTimeout(600);
+    await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
+    await page.waitForTimeout(2000);
+    const dialog = page.getByRole("dialog").last();
+    if ((await dialog.count()) === 0) throw new Error("The Delete confirmation did not open, so nothing was deleted.");
+    for (let i = 0; i < (await dialog.getByRole("checkbox").count()); i++) {
+      const box = dialog.getByRole("checkbox").nth(i);
+      if (!(await box.isChecked())) await box.check();
+    }
+    const confirm = dialog.getByRole("button", { name: /^delete/i }).last();
+    await confirm.waitFor({ state: "visible" });
+    await confirm.click();
+    for (let i = 0; i < 30 && deleteStatus === null; i++) await page.waitForTimeout(500);
+    if (deleteStatus === null) throw new Error("Lawcus did not confirm the delete request.");
+    if (deleteStatus < 200 || deleteStatus >= 300) throw new Error(`Lawcus refused the delete with status ${deleteStatus}.`);
+    await page.goto(`${STAGING}/contact/${uuid}`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(4000);
+    if ((await page.locator("body").innerText()).includes(expectedName)) throw new Error("The contact still shows after the delete.");
+    return { note: `Deleted in Lawcus (DELETE /contacts/${uuid} returned ${deleteStatus}); verified gone.` };
+  } finally {
+    context.off("response", onResponse);
+    await page.close().catch(() => {});
+  }
+}
