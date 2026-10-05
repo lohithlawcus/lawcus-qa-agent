@@ -81,13 +81,13 @@ test("the route families the architecture lists are exactly the ones the control
 
 // ---------- what the operator sees ----------
 
-test("every tab the operator guide names is a real tab, and every top-level tab is named", () => {
+test("every section the operator guide names is real, and every top-level section is named", () => {
   const page = read("app/page.tsx").replaceAll("&amp;", "&");
-  const rows = section(docs["docs/OPERATOR-GUIDE.md"], "The tabs").split("\n").filter((l) => /^\| [A-Z]/.test(l) && !l.startsWith("| Tab "));
+  const rows = section(docs["docs/OPERATOR-GUIDE.md"], "The sections").split("\n").filter((l) => /^\| [A-Z]/.test(l) && !l.startsWith("| Section "));
   const labels = rows.map((l) => l.split("|")[1].trim());
-  assert.equal(labels.length, 12);
+  assert.equal(labels.length, 9);
   for (const label of labels) assert.ok(page.includes(label), `no tab or heading "${label}" in the workspace`);
-  const topLevel = [...read("app/page.tsx").matchAll(/<TabsTrigger value="(workspace|testbook|ai-usage|history|proposals|knowledge|review|api|personas|teach|safety|environment)"/g)];
+  const topLevel = [...read("app/page.tsx").matchAll(/\{ id: "(tests|knowledge|decisions|api|ai-usage|personas|teach|safety|environment)", label:/g)];
   assert.equal(topLevel.length, labels.length);
   const guide = docs["docs/OPERATOR-GUIDE.md"];
   for (const wording of ["Sign in and save verified account", "Check browser connection", "Build plan", "Use standard login checks", "Mark as removed in Lawcus", "Keep it", "Records left in staging", "Sweep now", "Record and analyze", "Propose a revision", "Flag for re-review", "Load example", "Approve"]) {

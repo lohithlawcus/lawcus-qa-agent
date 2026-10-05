@@ -29,7 +29,6 @@ import {
   Video,
   Cpu,
   Power,
-  ClipboardCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -888,6 +887,23 @@ export default function Home() {
   const pendingNetworkAuthorities = state?.networkAuthoritiesInbox || [];
   const pendingApiCount =
     pendingApiContracts.length + pendingEnvironmentAdapters.length + pendingNetworkAuthorities.length;
+  // Top-level sections of the workspace. Each group holds one or more panels;
+  // a group with several panels shows them as sub-tabs. Every panel keeps its own
+  // value, so its content and behaviour are unchanged by the grouping.
+  const WORKSPACE_GROUPS = [
+    { id: "tests", label: "Tests", icon: Terminal, members: [["workspace", "New test"], ["testbook", "Checks"], ["history", "Results"]] },
+    { id: "knowledge", label: "Knowledge", icon: Lightbulb, members: [["knowledge", "Rules"], ["review", "Facts & changes"]], badge: () => pendingKnowledgeCount },
+    { id: "decisions", label: "Decisions", icon: Inbox, members: [["proposals", "Proposals"]], badge: () => pendingProposals.length },
+    { id: "api", label: "API Contracts", icon: Webhook, members: [["api", "API Contracts"]], badge: () => pendingApiCount },
+    { id: "ai-usage", label: "AI Usage", icon: Cpu, members: [["ai-usage", "AI Usage"]] },
+    { id: "personas", label: "Personas", icon: Users, members: [["personas", "Personas"]] },
+    { id: "teach", label: "Teach / Record", icon: Video, members: [["teach", "Teach / Record"]] },
+    { id: "safety", label: "Safety & coverage", icon: ShieldCheck, members: [["safety", "Safety & coverage"]] },
+    { id: "environment", label: "Environment", icon: Globe, members: [["environment", "Environment"]] },
+  ];
+
+  const activeGroup = WORKSPACE_GROUPS.find((g) => g.members.some(([value]) => value === tab)) ?? WORKSPACE_GROUPS[0];
+
   return (
     <div className="shell">
       <header className="masthead">
@@ -911,63 +927,35 @@ export default function Home() {
       </header>
       <Tabs value={tab} onValueChange={setTab} className="workspace-tabs">
         <div className="nav-wrap">
-          <TabsList variant="line" className="top-nav">
-            <TabsTrigger value="workspace">
-              <Terminal />
-              Test
-            </TabsTrigger>
-            <TabsTrigger value="testbook">
-              <ListChecks />
-              TestBook
-            </TabsTrigger>
-            <TabsTrigger value="ai-usage">
-              <Cpu />
-              AI Usage
-            </TabsTrigger>
-            <TabsTrigger value="history">
-              <History />
-              Run history
-            </TabsTrigger>
-            <TabsTrigger value="proposals">
-              <Inbox />
-              Proposals
-              {pendingProposals.length > 0 && (
-                <Badge variant="outline">{pendingProposals.length}</Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="knowledge">
-              <Lightbulb />
-              Knowledge
-              {pendingKnowledgeCount > 0 && (
-                <Badge variant="outline">{pendingKnowledgeCount}</Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="review">
-              <ClipboardCheck />
-              Facts &amp; changes
-            </TabsTrigger>
-            <TabsTrigger value="api">
-              <Webhook />
-              API Contracts
-              {pendingApiCount > 0 && <Badge variant="outline">{pendingApiCount}</Badge>}
-            </TabsTrigger>
-            <TabsTrigger value="personas">
-              <Users />
-              Personas
-            </TabsTrigger>
-            <TabsTrigger value="teach">
-              <Video />
-              Teach / Record
-            </TabsTrigger>
-            <TabsTrigger value="safety">
-              <ShieldCheck />
-              Safety & coverage
-            </TabsTrigger>
-            <TabsTrigger value="environment">
-              <Globe />
-              Environment
-            </TabsTrigger>
-          </TabsList>
+          <div className="top-nav" role="group" aria-label="Sections">
+            {WORKSPACE_GROUPS.map((g) => {
+              const GroupIcon = g.icon;
+              const active = g.id === activeGroup.id;
+              const badge = g.badge?.() ?? 0;
+              return (
+                <Button
+                  key={g.id}
+                  type="button"
+                  variant={active ? "secondary" : "ghost"}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => setTab(g.members[0][0])}
+                >
+                  <GroupIcon />
+                  {g.label}
+                  {badge > 0 && <Badge variant="outline">{badge}</Badge>}
+                </Button>
+              );
+            })}
+          </div>
+          {activeGroup.members.length > 1 && (
+            <TabsList variant="line" className="sub-nav" aria-label={`${activeGroup.label} sections`}>
+              {activeGroup.members.map(([value, label]) => (
+                <TabsTrigger key={value} value={value}>
+                  {label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          )}
           <span className="version">V1 · Login slice</span>
         </div>
         <main className="main">

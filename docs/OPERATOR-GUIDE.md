@@ -10,23 +10,22 @@ It is one Mac, one dedicated test account, one run at a time. It is not complete
 
 ## Setting up staging safely (first time)
 
-1. Open the **Environment** tab.
+1. Open the **Environment** section.
 2. Choose **Sign in and save verified account**. A separate browser window opens: sign in yourself with the dedicated test account, then open the profile menu. The tool confirms it is the right account before saving anything to the macOS Keychain. Never type this password anywhere else in the tool.
 3. Choose **Check browser connection**. This only proves the test browser can start.
 4. Do not use your own personal account for tests. Use only the dedicated QA account.
 
-## The tabs
+## The sections
 
-| Tab | What it is for |
+The top bar groups the workspace into sections. A group with several panels shows them as sub-tabs under the bar.
+
+| Section | What it is for |
 | --- | --- |
-| Test | Ask for a test in plain words, review the plan, run it. |
-| TestBook | Every check the tool knows, by feature, with its history. |
-| AI Usage | Every AI call, and the switch that turns AI use off. |
-| Run history | Every run and its evidence. Also where records left in staging are listed. |
-| Proposals | Changes the tool suggests (a new test, a locator change). Nothing applies until you approve it. |
-| Knowledge | Facts waiting for your approval, and the import box. |
-| Facts & changes | Every fact with its evidence, and the place to record a product change. |
+| Tests | Three sub-tabs: **New test** (ask for a test in plain words, review the plan, run it), **Checks** (every check the tool knows, by feature, with its history), **Results** (every run and its evidence, and where records left in staging are listed). |
+| Knowledge | Two sub-tabs: **Rules** (facts waiting for your approval, and the import box), **Facts & changes** (every fact with its evidence, and the place to record a product change). |
+| Decisions | **Proposals**: changes the tool suggests (a new test, a locator change). Nothing applies until you approve it. |
 | API Contracts | What a Lawcus request should look like. You approve each one. |
+| AI Usage | Every AI call, and the switch that turns AI use off. |
 | Personas | Extra test accounts, verified by a real sign-in. |
 | Teach / Record | Show the tool a workflow once; it becomes a proposal, never an automatic test. |
 | Safety & coverage | Which checks count as coverage today and why the others do not, a quality baseline, and what the tool guards against. |
@@ -34,7 +33,7 @@ It is one Mac, one dedicated test account, one run at a time. It is not complete
 
 ## Running a test
 
-1. In **Test**, pick the environment (Fiveriverz is the main staging tenant) and describe what you want, or use **Use standard login checks**.
+1. In **Tests → New test**, pick the environment (Fiveriverz is the main staging tenant) and describe what you want, or use **Use standard login checks**.
 2. **Build plan.** The plan is a proposal. It lists each check and, for plans built from Knowledge, why each was chosen and what must be set up first.
 3. Read it. If it says **CANNOT RUN YET**, it lists what is missing and the run button stays off. If it shows **Needs your review**, a relationship between features is waiting for your approval and was **not** used.
 4. Run it. Runs are limited to **three sign-ins per ten minutes** because the shared test account has stalled after bursts. Wait if you hit the limit; do not keep retrying.
@@ -67,23 +66,23 @@ The technical reason code is shown next to the explanation.
 
 ## Evidence
 
-Open a run in **Run history** to see its results, screenshots and traces. Screenshots hide password fields. Downloading evidence makes a decrypted copy that you control. A check whose evidence **could not be saved** is not counted as passed and is marked as an integrity problem.
+Open a run in **Tests → Results** to see its results, screenshots and traces. Screenshots hide password fields. Downloading evidence makes a decrypted copy that you control. A check whose evidence **could not be saved** is not counted as passed and is marked as an integrity problem.
 
 ## Records left in Lawcus
 
 Some checks create records in Lawcus (a contact, a lead, a matter). The tool writes each one down as soon as it exists. It **does not delete them on its own**; deleting one is a decision for you, and the approval path that would allow it is designed but not yet available.
 
-- In **Run history**, **Records left in staging** lists what runs created and Lawcus still holds. Remove a record in Lawcus yourself, then press **Mark as removed in Lawcus**. That only records what you did and never deletes anything. Or press **Keep it** if it should stay. To have the tool delete a record, approve it in **Records the tool created** and use **Delete one approved record**.
+- In **Tests → Results**, **Records left in staging** lists what runs created and Lawcus still holds. Remove a record in Lawcus yourself, then press **Mark as removed in Lawcus**. That only records what you did and never deletes anything. Or press **Keep it** if it should stay. To have the tool delete a record, approve it in **Records the tool created** and use **Delete one approved record**.
 - If a create was clicked but never confirmed, a "may exist" entry tells you what name to search for.
 
 **The staging sweep** (Environment tab, **Sweep now**) reads the tenant's Contacts, Matters and Leads lists and shows records whose names match this tool's naming (`QA Agent …`, `QA Matter …`, `QAFieldTest…`, `QA Batch …`, `QA impacted-test …`) that the tool has no record of. It changes nothing and copies nobody else's records. A matching name is only a **candidate**: mark each one **Ours**, **Not ours** or **Leave in place**. It sees open matters only.
 
 ## Teaching the tool a rule
 
-1. In **Knowledge**, paste rules into the import box (**Load example** shows the format; the full format is in `server/knowledge/IMPORT_TEMPLATE.md`). Every fact needs a **Source Title**. Add a `Scope:` line (for example `Scope: roles=owner,admin; environments=lawcus`) only for a fact that holds for some roles, configurations, tenants or environments; leave it out for a fact that applies everywhere. One mistake refuses the whole import and names the line.
+1. In **Knowledge → Rules**, paste rules into the import box (**Load example** shows the format; the full format is in `server/knowledge/IMPORT_TEMPLATE.md`). Every fact needs a **Source Title**. Add a `Scope:` line (for example `Scope: roles=owner,admin; environments=lawcus`) only for a fact that holds for some roles, configurations, tenants or environments; leave it out for a fact that applies everywhere. One mistake refuses the whole import and names the line.
 2. Imported facts wait as **pending review**. Read each one, add a note if you like, and **Approve** or **Reject**.
 3. If approving would replace a documented fact with weaker evidence (observed, inferred or assumed), the tool stops and asks you to write why. Only then can you approve anyway.
-4. In **Facts & changes → Facts**, open any fact to see who approved it, its source, where it applies, which tests assert it and its history.
+4. In **Knowledge → Facts & changes**, open any fact to see who approved it, its source, where it applies, which tests assert it and its history.
 
 Relationships between features ("Matters depend on Contacts") are proposed the same way and used in plans only after you approve them.
 
@@ -91,7 +90,7 @@ Relationships between features ("Matters depend on Contacts") are proposed the s
 
 When Lawcus changes (a release note, a requirement, something a tester noticed):
 
-1. Open **Facts & changes → Product changes**, choose the kind, write a title and what changed, and press **Record and analyze**. Passwords and tokens pasted here are masked.
+1. Open **Knowledge → Facts & changes → Product changes**, choose the kind, write a title and what changed, and press **Record and analyze**. Passwords and tokens pasted here are masked.
 2. The tool shows the facts the change may touch and the checks worth re-running, each with its reason, and what is missing.
 3. For any fact you can **Propose a revision** (it waits for your approval like any fact), **Flag for re-review** (a reminder; the fact stays approved), or resolve a flag as still valid, revised or obsolete.
 

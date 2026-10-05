@@ -63,15 +63,29 @@ const ui = (name, fn) =>
   });
 
 // The workspace must have hydrated before a click does anything, so keep clicking until the tab is selected.
+// Sections are grouped: a top-level group button, then (for groups with several panels) a sub-tab.
+const SECTION = {
+  "Facts & changes": ["Knowledge", "Facts & changes"],
+  "Run history": ["Tests", "Results"],
+};
 async function tab(name) {
-  const target = page.getByRole("tab", { name: new RegExp(`^${name}`) });
+  const [group, sub] = SECTION[name] ?? [name, null];
   await page.getByText("Local runner connected").first().waitFor();
+  // Group buttons can carry a count badge, so match on the start of the name.
+  const groupButton = page.getByRole("button", { name: new RegExp(`^${group}`) }).first();
   for (let attempt = 0; attempt < 10; attempt++) {
-    await target.click();
-    if ((await target.getAttribute("aria-selected")) === "true") return;
+    await groupButton.click();
+    if ((await groupButton.getAttribute("aria-current")) === "page") break;
     await page.waitForTimeout(500);
   }
-  assert.fail(`Could not open the ${name} tab.`);
+  if (!sub) return;
+  const subTab = page.getByRole("tab", { name: sub, exact: true });
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await subTab.click();
+    if ((await subTab.getAttribute("aria-selected")) === "true") return;
+    await page.waitForTimeout(500);
+  }
+  assert.fail(`Could not open the ${name} section.`);
 }
 
 ui("a bad import is refused whole, with the line named", async () => {
