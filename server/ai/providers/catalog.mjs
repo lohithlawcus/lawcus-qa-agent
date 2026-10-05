@@ -17,7 +17,7 @@ export const AI_PROVIDERS = {
     baseUrl: "https://openrouter.ai/api/v1",
     api: "chat",
     account: "ai-openrouter",
-    defaultModel: "openai/gpt-4.1-mini",
+    defaultModel: "google/gemma-4-31b-it:free",
     keyPage: "https://openrouter.ai/keys",
   },
   anthropic: {
