@@ -174,3 +174,37 @@ test("approvals and deletions are written to the audit trail", () => {
     assert.ok(actions.includes("resource.deletion_approved"), `audit has: ${actions}`);
   });
 });
+
+// ---- Lawcus contact delete: guard, policy, handler (no browser) ----
+import { refuseContactDeletion } from "../core/contacts-browser.mjs";
+import { permitContactsDeleteRequest, lawcusDeleteHandlers } from "../core/live-runner.mjs";
+import { API_ORIGIN } from "../core/environment-adapter.mjs";
+
+const GOOD_UUID = "7e3684e0-c08a-11f1-bfd1-9bb622ca3c69";
+
+test("the contact delete guard refuses a bad id, a protected fixture, or a missing recorded name", () => {
+  assert.match(refuseContactDeletion({ uuid: "not-a-uuid", expectedName: "QA Agent x" }), /not a valid uuid/);
+  assert.match(refuseContactDeletion({ uuid: PROTECTED, expectedName: "QA Agent x", protectedIds: [PROTECTED] }), /protected QA fixture/);
+  assert.match(refuseContactDeletion({ uuid: GOOD_UUID, expectedName: null }), /No approved record name/);
+  assert.match(refuseContactDeletion({ uuid: GOOD_UUID, expectedName: "  " }), /No approved record name/);
+  assert.equal(refuseContactDeletion({ uuid: GOOD_UUID, expectedName: "QA Agent delete-capture 1791184914601", protectedIds: [PROTECTED] }), null);
+});
+
+test("the policy allows exactly one new request shape: DELETE /contacts/{uuid} on the Lawcus API", () => {
+  const api = API_ORIGIN;
+  assert.equal(permitContactsDeleteRequest(`${api}/contacts/${GOOD_UUID}`, "DELETE", "fetch", null), true);
+  assert.equal(permitContactsDeleteRequest(`${api}/contacts`, "DELETE", "fetch", null), false, "no uuid");
+  assert.equal(permitContactsDeleteRequest(`${api}/matters/${GOOD_UUID}`, "DELETE", "fetch", null), false, "other resource");
+  assert.equal(permitContactsDeleteRequest(`${api}/contacts/${GOOD_UUID}/notes`, "DELETE", "fetch", null), false, "sub-path");
+  assert.equal(permitContactsDeleteRequest(`https://evil.example/contacts/${GOOD_UUID}`, "DELETE", "fetch", null), false, "other host");
+  // Existing contacts writes are unchanged.
+  assert.equal(permitContactsDeleteRequest(`${api}/contacts/${GOOD_UUID}`, "PUT", "fetch", null), true);
+  assert.equal(permitContactsDeleteRequest(`${api}/contacts`, "POST", "fetch", null), true);
+});
+
+test("the Lawcus delete handler is registered for contacts only", () => {
+  const handlers = lawcusDeleteHandlers();
+  assert.equal(typeof handlers.contact, "function");
+  assert.equal(handlers.matter, undefined, "matters are not deletable yet");
+  assert.equal(handlers.lead, undefined, "leads are not deletable yet");
+});

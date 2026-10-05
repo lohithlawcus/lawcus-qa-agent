@@ -24,7 +24,7 @@ Evidence comes from three places:
 | MCP server (23 tools) | Working. Exercised over stdio by the automated test suite (not run live today). |
 | Teach / Record: perform a workflow once, bracketed by a draggable in-page "Start/Stop teaching" marker, and get proposals back | Working. First real session on Fiveriverz (4 October 2026, UTC): a Company-contact creation recorded exactly 4 actions (Name, Email, Phone, Save) and produced 4 `NEW_PRIMITIVE` proposals and 1 `TESTABILITY_HOOK_REQUEST` for a field with no stable locator. A recording session has no network restriction and no pinned-egress proxy; see `ARCHITECTURE.md`. |
 | Preflight before a staging sign-in, and a sign-in stall diagnostic | Working. Refuses a run before it spends a sign-in if the evidence key, evidence folder, Chromium or tenant DNS is unavailable. |
-| Deletion of records in staging | **Approval gate built and tested; not live.** Only records the tool created (by exact ID), approved one at a time by a named human, and never a protected fixture. No Lawcus delete action has been verified yet, so nothing is deleted. |
+| Deletion of records in staging | **Built and tested; not yet run through approval.** Only records the tool created (by exact ID), approved one at a time by a named human, and never a protected fixture. The Lawcus delete action was captured on 5 October 2026 on a disposable contact, which was then deleted. The approval screen does not exist yet. |
 
 ## What has run on real staging (this Mac's run history, 5 October 2026)
 
@@ -99,7 +99,7 @@ These were run against real staging on 26 September 2026 but written to a scratc
 
 ## Known limits
 
-- **Nothing is deleted from staging yet.** Deletion was authorized on 5 October 2026 and its approval gate is built, but the exact Lawcus delete request has not been captured (it needs a disposable, tool-created test record and your approval to create and delete it). The protected fixture contacts are never deletable.
+- **Only one staging deletion has been performed, by hand-supervised capture:** a disposable contact the tool created on 5 October 2026 was deleted through the Lawcus UI. The approval-driven deletion path has not been run against staging. The protected fixture contacts are never deletable.
 - **The sweep sees only OPEN matters** (the app's default list) and matches by name only. A name is a candidate, never proof.
 - **The database is at migration 25.** The service applied migrations 20–25 when it restarted on 5 October 2026.
 - **Dependency audit:** the `braces` advisory (GHSA-vfj7-8cjw-p6xm) is flagged on every released version and has no fix. CI's audit gate is therefore set to `critical` (`npm audit --audit-level=critical`). The critical Next.js RCE was fixed on 4 October 2026 (PR #32).
