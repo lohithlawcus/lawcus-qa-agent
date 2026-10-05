@@ -165,6 +165,14 @@ ui("Teach / Record: an empty description is refused, and no recording starts whe
   assert.equal(await page.getByText("RECORDING IN PROGRESS").count(), 0);
 });
 
+ui("Run history shows the staging deletions panel, empty on a fresh backend", async () => {
+  await tab("Run history");
+  await page.getByRole("heading", { name: "Records the tool created" }).waitFor();
+  await page.getByText("No records are waiting for a deletion decision.").waitFor();
+  const panel = await page.getByRole("heading", { name: "Records the tool created" }).locator("xpath=ancestor::div[contains(@class,'panel')][last()]").innerText();
+  assert.match(panel, /nothing is deleted from Lawcus until a deletion run is started/);
+});
+
 ui("Sweep now refuses cleanly when the environment is not set up, and records nothing", async () => {
   await tab("Environment");
   await page.getByRole("button", { name: "Sweep now" }).click();
