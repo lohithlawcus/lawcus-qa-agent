@@ -8,7 +8,7 @@ import Security
 // 'lawcus-login' itself: a literal, deliberate allowlist entry per real
 // credential, never a wildcard/pattern match.
 let service = "com.lawcus.qa-agent.local.v1"
-let allowed = Set(["lawcus-login", "lawcus-login-co-server", "lawcus-login-prod-usa", "lawcus-login-prod-eu", "openai-api", "ai-openrouter", "ai-anthropic", "artifact-key"])
+let allowed = Set(["lawcus-login", "lawcus-login-co-server", "lawcus-login-prod-usa", "lawcus-login-prod-eu", "openai-api", "ai-openrouter", "ai-anthropic", "ai-huggingface", "artifact-key"])
 func reply(_ object: [String: Any]) -> Never {
     if let data = try? JSONSerialization.data(withJSONObject: object) {
         FileHandle.standardOutput.write(data)

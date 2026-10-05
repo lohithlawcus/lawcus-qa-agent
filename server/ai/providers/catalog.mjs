@@ -20,6 +20,14 @@ export const AI_PROVIDERS = {
     defaultModel: "google/gemma-4-31b-it:free",
     keyPage: "https://openrouter.ai/keys",
   },
+  huggingface: {
+    label: "Hugging Face",
+    baseUrl: "https://router.huggingface.co/v1",
+    api: "chat",
+    account: "ai-huggingface",
+    defaultModel: "google/gemma-4-31B-it",
+    keyPage: "https://huggingface.co/settings/tokens",
+  },
   anthropic: {
     label: "Anthropic",
     baseUrl: "https://api.anthropic.com/v1",

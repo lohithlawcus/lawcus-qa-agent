@@ -11,7 +11,7 @@ import {noteKeychainValue} from './redact.mjs';
 // slot, same discipline as the persona slots above: 'lawcus-login' stays
 // Fiveriverz's own slot (unchanged, so its already-saved credential is
 // never disturbed by this), the three new environments get their own.
-const accounts=new Set(['lawcus-login','lawcus-login-co-server','lawcus-login-prod-usa','lawcus-login-prod-eu','openai-api','ai-openrouter','ai-anthropic','artifact-key','lawcus-persona-admin','lawcus-persona-member','lawcus-persona-co-counsel','lawcus-persona-custom']);
+const accounts=new Set(['lawcus-login','lawcus-login-co-server','lawcus-login-prod-usa','lawcus-login-prod-eu','openai-api','ai-openrouter','ai-anthropic','ai-huggingface','artifact-key','lawcus-persona-admin','lawcus-persona-member','lawcus-persona-co-counsel','lawcus-persona-custom']);
 export async function keychain(operation,account,value){
  // Test-safety tripwire: a process that sets QA_FORBID_LIVE (the truthful-
  // accounting tests do) can never reach the real Keychain, so a broken
