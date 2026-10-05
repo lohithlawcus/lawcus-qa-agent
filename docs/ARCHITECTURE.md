@@ -57,7 +57,17 @@ The policies are in `live-runner.mjs` (`permit*` functions). They are defense in
 
 ## Records a check creates
 
-`resource-ownership.mjs` records each record a check creates as soon as its id is known, and records a "may exist" leftover when a create was clicked but never confirmed. Cleanup is **report-only**: the cleanup runner is given no delete handlers, so nothing is deleted. Leftovers are listed for a person to resolve. Protected fixture records can never be recorded as created. The sweep looks for QA-named records the local records do not know about.
+`resource-ownership.mjs` records each record a check creates as soon as its id is known, and records a "may exist" leftover when a create was clicked but never confirmed. Records are created with a **manual** policy, so cleanup never touches them on its own. Leftovers are listed for a person to resolve. Protected fixture records can never be recorded as created.
+
+**Staging deletion (designed; the approval gate is built and tested, but no Lawcus delete action has been verified or run).** A record can be deleted from staging only when all of these hold:
+
+- The tool created it and recorded its exact ID. Names never grant deletion authority, so the sweep's QA-named candidates are never deletable.
+- A named human operator approves it, one record at a time (`approveDeletion`). Automated actors (MCP, the runner, the AI, the network observer) cannot approve, enforced by a test.
+- It is not a protected fixture, and it was not "kept" on purpose. Protected records are refused at creation and again at approval.
+- Approval only marks the record for deletion. `runApprovedDeletions` (`cleanup.mjs`) later calls the delete handler for its resource type, records the outcome on that row, and continues past a failure. A record whose type has no handler stays approved and pending, not skipped, so approval is never consumed silently.
+- An approval can be withdrawn until it is carried out.
+
+Not yet built: a Lawcus delete handler (the exact delete request must first be captured from a disposable, tool-created record with approval), and the screen or route that lets an operator approve. The sweep looks for QA-named records the local records do not know about.
 
 ## Knowledge
 
