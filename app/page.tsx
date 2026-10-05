@@ -947,7 +947,11 @@ export default function Home() {
               );
             })}
           </div>
-          {activeGroup.members.length > 1 && (
+          <span className="version">V1 · Login slice</span>
+        </div>
+        {activeGroup.members.length > 1 && (
+          <div className="sub-band">
+            <span className="sub-band-title">{activeGroup.label}</span>
             <TabsList variant="line" className="sub-nav" aria-label={`${activeGroup.label} sections`}>
               {activeGroup.members.map(([value, label]) => (
                 <TabsTrigger key={value} value={value}>
@@ -955,9 +959,8 @@ export default function Home() {
                 </TabsTrigger>
               ))}
             </TabsList>
-          )}
-          <span className="version">V1 · Login slice</span>
-        </div>
+          </div>
+        )}
         <main className="main">
           <div className="page-heading">
             <div>
@@ -1772,17 +1775,25 @@ export default function Home() {
             </div>
           </TabsContent>
           <TabsContent value="knowledge">
-            <div className="knowledge-summary">
-              <div className="knowledge-summary-stat">
-                <strong>{pendingKnowledgeCount}</strong>
-                <span>Pending review</span>
+            <div className="ui-hero ui-hero-compact">
+              <div className="ui-hero-text">
+                <span className="section-label">WHAT LAWCUS SHOULD DO</span>
+                <h2>Product rules, with their sources</h2>
+                <p>Every rule cites where it came from. Nothing becomes trusted until a person approves it.</p>
               </div>
-              <div className="knowledge-summary-stat">
-                <strong>{approvedKnowledgeCount}</strong>
-                <span>Approved</span>
+              <div className="ui-tiles ui-tiles-inline">
+                <div className={`ui-tile ${pendingKnowledgeCount > 0 ? "warn" : ""}`}>
+                  <strong>{pendingKnowledgeCount}</strong>
+                  <span>waiting for your review</span>
+                </div>
+                <div className="ui-tile good">
+                  <strong>{approvedKnowledgeCount}</strong>
+                  <span>approved and trusted</span>
+                </div>
               </div>
             </div>
-            <div className="panel question-panel panel-highlight">
+            <div className="ui-grid-2 ui-knowledge-top">
+            <div className="ui-card ui-card-accent">
               <div className="panel-heading">
                 <span className="section-label">ADD KNOWLEDGE</span>
                 <Lightbulb />
@@ -1850,7 +1861,7 @@ export default function Home() {
                 </div>
               )}
             </div>
-            <div className="panel question-panel">
+            <div className="ui-card">
               <span className="section-label">KNOWLEDGE INBOX</span>
               {!pendingKnowledgeItems.length && !pendingKnowledgeEdges.length ? (
                 <div className="empty-small">
@@ -2021,8 +2032,9 @@ export default function Home() {
                 </>
               )}
             </div>
+            </div>
             {state?.knowledgeApproved.length ? (
-              <div className="panel question-panel">
+              <div className="ui-card">
                 <span className="section-label">APPROVED KNOWLEDGE</span>
                 {state.knowledgeApproved.map((group) => (
                   <div key={group.feature}>
@@ -2413,10 +2425,11 @@ export default function Home() {
           </TabsContent>
           <TabsContent value="safety">
             <CoverageReport />
-            <div className="safety-grid">
-              <div className="panel">
+            <div className="ui-grid-2">
+              <div className="ui-card">
                 <span className="section-label">ENFORCED IN THIS VERSION</span>
                 <h2>Boundaries before autonomy</h2>
+                <p className="subtle">What the tool refuses to do, enforced in code today.</p>
                 {[
                   "Only the local fixture and your authorized Lawcus staging target can execute.",
                   "Staging uses a proxy restricted to known public staging hosts. Service workers and WebSockets are blocked.",
@@ -2426,13 +2439,13 @@ export default function Home() {
                   "Staging evidence is encrypted locally. Downloads require a local session and produce decrypted copies. Screenshots mask input fields.",
                   "A single active run limits collisions and repeated login attempts.",
                 ].map((s) => (
-                  <div className="safety-row" key={s}>
+                  <div className="ui-item" key={s}>
                     <ShieldCheck size={17} />
                     <p>{s}</p>
                   </div>
                 ))}
               </div>
-              <div className="panel">
+              <div className="ui-card">
                 <span className="section-label">BEFORE BROADER RELEASE</span>
                 <h2>Remaining coverage and security work</h2>
                 <p className="subtle">
@@ -2446,14 +2459,14 @@ export default function Home() {
                   "Add automatic evidence retention and secure deletion controls",
                   "Complete dependency review and independent security testing",
                 ].map((s, i) => (
-                  <div className="safety-row" key={s}>
+                  <div className="ui-item" key={s}>
                     <span className="step-number">{i + 1}</span>
                     <p>{s}</p>
                   </div>
                 ))}
               </div>
             </div>
-            <div className="panel question-panel">
+            <div className="ui-card">
               <span className="section-label">HUMAN CLARIFICATION</span>
               <h2>Keep business decisions explicit</h2>
               {!questions.length ? (
@@ -2500,7 +2513,7 @@ export default function Home() {
                 ))
               )}
             </div>
-            <div className="panel question-panel">
+            <div className="ui-card">
               <span className="section-label">AUDIT HISTORY</span>
               {state?.audit.length ? (
                 state.audit.map((a) => (

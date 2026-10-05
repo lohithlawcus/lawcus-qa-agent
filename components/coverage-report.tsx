@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Badge } from "@/components/ui/badge";
 import { request } from "@/lib/qa-api";
 
 type Attempt = { at: string; ageDays: number; status: string; failureClass: string | null; reasonCode: string | null; codeRevision: string | null };
@@ -35,15 +34,25 @@ type Report = {
   };
 };
 
-const STATE_LABEL: Record<string, string> = {
-  covered: "Counts as coverage",
-  stale: "Stale",
-  failing: "Failing",
-  inconclusive: "Never conclusive",
-  never_run_on_staging: "Never run on staging",
-  quarantined: "Quarantined",
-  not_approved: "Not approved",
-};
+// Plain-English labels and one-line reasons for each state. Kept in step with the
+// states the coverage report returns; the report's own explanations stay the source of truth.
+const STATE = {
+  covered: { label: "Counts as coverage", tone: "good", why: "Passed recently, and that is the latest result that counts." },
+  stale: { label: "Stale", tone: "warn", why: "Last passed more than 14 days ago. Run it again to refresh it." },
+  failing: { label: "Failing", tone: "bad", why: "The latest result that counts is a failure." },
+  inconclusive: { label: "Never conclusive", tone: "warn", why: "Every attempt was blocked, so nothing counts yet." },
+  never_run_on_staging: { label: "Never run on staging", tone: "muted", why: "Not run on the staging tenant yet." },
+  quarantined: { label: "Quarantined", tone: "muted", why: "Known broken automation, held back on purpose." },
+  not_approved: { label: "Not approved", tone: "muted", why: "Waiting for approval, so it isn't used yet." },
+} as const;
+type StateKey = keyof typeof STATE;
+
+const LANES: { title: string; hint: string; states: StateKey[] }[] = [
+  { title: "Counts as coverage", hint: "These are what we can point to today.", states: ["covered"] },
+  { title: "Needs attention", hint: "Something here needs a re-run or a look.", states: ["failing", "stale", "inconclusive"] },
+  { title: "Not counted yet", hint: "Not run, held back, or waiting for approval.", states: ["never_run_on_staging", "quarantined", "not_approved"] },
+];
+
 const CLASS_LABEL: Record<string, string> = {
   functional: "Lawcus behaved differently",
   infrastructure: "Environment",
@@ -54,6 +63,30 @@ const CLASS_LABEL: Record<string, string> = {
 };
 
 const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+function Ring({ value, total }: { value: number; total: number }) {
+  const r = 52;
+  const c = 2 * Math.PI * r;
+  const share = total ? value / total : 0;
+  return (
+    <svg viewBox="0 0 128 128" width="128" height="128" role="img" aria-label={`${value} of ${total} checks count as coverage`}>
+      <circle cx="64" cy="64" r={r} fill="none" stroke="var(--cov-track, #e6ece9)" strokeWidth="12" />
+      <circle
+        cx="64"
+        cy="64"
+        r={r}
+        fill="none"
+        stroke="var(--cov-fill, #12624e)"
+        strokeWidth="12"
+        strokeLinecap="round"
+        strokeDasharray={`${c * share} ${c}`}
+        transform="rotate(-90 64 64)"
+      />
+      <text x="64" y="62" textAnchor="middle" className="ring-number">{value}</text>
+      <text x="64" y="82" textAnchor="middle" className="ring-of">of {total}</text>
+    </svg>
+  );
+}
 
 export function CoverageReport() {
   const [report, setReport] = useState<Report | null>(null);
@@ -71,57 +104,111 @@ export function CoverageReport() {
 
   if (error)
     return (
-      <div className="panel">
+      <div className="ui-card">
         <div className="notice error" role="alert">
           <p>{error}</p>
         </div>
       </div>
     );
-  if (!report) return <div className="panel"><p className="subtle">Loading the coverage report…</p></div>;
+  if (!report) return <div className="ui-card"><p className="subtle">Loading the coverage report…</p></div>;
 
   const { summary, quality } = report;
+  const failureTotal = Object.values(quality.failuresByClass).reduce((a, b) => a + b, 0);
   return (
-    <div className="panel" style={{ marginBottom: 16 }}>
-      <span className="section-label">FROM THE RUN HISTORY</span>
-      <h2>What counts as coverage today</h2>
-      <p className="subtle">
-        {summary.coveredCases} of {summary.cases} checks count as coverage on the main staging tenant: their last result that counts is a pass
-        within {report.staleAfterDays} days. Everything else is listed with why it does not.
-      </p>
-      <div className="scenario-list">
-        {report.cases.map((c) => (
-          <div className="list-row" key={c.externalId} style={{ display: "block" }}>
-            <div className="inline">
-              <strong>{c.externalId}</strong>
-              <Badge variant={c.countsAsCoverage ? "secondary" : "outline"}>{STATE_LABEL[c.state] ?? c.state}</Badge>
-            </div>
-            <p className="subtle">
-              {c.feature} · {c.stagingRuns} staging run{c.stagingRuns === 1 ? "" : "s"}
-              {c.lastConclusive ? ` · last result that counts: ${c.lastConclusive.status} on ${day(c.lastConclusive.at)}` : ""}
-              {c.newerInconclusiveAttempt && c.lastAttempt ? ` · a newer attempt on ${day(c.lastAttempt.at)} did not count (${c.lastAttempt.reasonCode ?? c.lastAttempt.failureClass ?? "blocked"})` : ""}
-              {c.quarantineReason ? ` · ${c.quarantineReason}` : ""}
-            </p>
+    <section className="ui-stack">
+      <div className="ui-hero">
+        <Ring value={summary.coveredCases} total={summary.cases} />
+        <div className="ui-hero-text">
+          <span className="section-label">WHAT COUNTS TODAY</span>
+          <h2>What counts as coverage today</h2>
+          <p>
+            <strong>{summary.coveredCases} of {summary.cases} checks count as coverage</strong> on the main staging tenant. A check counts when its latest result that counts is a pass within {report.staleAfterDays} days.
+          </p>
+          <div className="ui-chips" aria-label="Checks by state">
+            {(Object.keys(STATE) as StateKey[])
+              .filter((k) => (summary.byState[k] ?? 0) > 0)
+              .map((k) => (
+                <span key={k} className={`ui-chip ui-chip-${STATE[k].tone}`}>
+                  {summary.byState[k]} {STATE[k].label.toLowerCase()}
+                </span>
+              ))}
           </div>
-        ))}
+        </div>
       </div>
-      <h3 style={{ marginTop: 20 }}>Quality baseline, last {quality.windowDays} days</h3>
-      <p className="subtle">{quality.note}</p>
-      <p>
-        {quality.checks.executed} checks ran on real tenants: {quality.checks.passed} passed, {quality.checks.failed} failed.
-        {quality.functionalShareOfFailures === null
-          ? " None of the failures were recorded with a cause, so the share that are about Lawcus cannot be stated yet."
-          : ` ${quality.functionalShareOfFailures}% of the ${quality.functionalShareBasis} classified failures say Lawcus behaved differently.`}
-      </p>
-      <ul>
-        {Object.entries(quality.failuresByClass)
-          .filter(([, n]) => n > 0)
-          .map(([k, n]) => (
-            <li key={k}>
-              {CLASS_LABEL[k] ?? k}: {n}
-            </li>
-          ))}
-      </ul>
-      {quality.flakyCases.length > 0 && <p>Passed and failed on the same code: {quality.flakyCases.join(", ")}</p>}
-    </div>
+
+      <div className="ui-lanes">
+        {LANES.map((lane) => {
+          const rows = report.cases.filter((c) => lane.states.includes(c.state as StateKey));
+          return (
+            <div className="ui-card" key={lane.title}>
+              <div className="ui-card-head">
+                <h3>{lane.title}</h3>
+                <span className="ui-count">{rows.length}</span>
+              </div>
+              <p className="subtle">{lane.hint}</p>
+              {rows.length === 0 ? (
+                <p className="subtle ui-empty">Nothing here.</p>
+              ) : (
+                <ul className="ui-list">
+                  {rows.map((c) => {
+                    const meta = STATE[c.state as StateKey];
+                    return (
+                      <li key={c.externalId} className="ui-row">
+                        <div className="ui-row-top">
+                          <code className="ui-code">{c.externalId}</code>
+                          <span className={`ui-chip ui-chip-${meta.tone}`}>{meta.label}</span>
+                        </div>
+                        <p className="ui-row-meta">
+                          {c.feature} · {c.stagingRuns} staging run{c.stagingRuns === 1 ? "" : "s"}
+                          {c.lastConclusive ? ` · last counted result ${c.lastConclusive.status} on ${day(c.lastConclusive.at)}` : ""}
+                        </p>
+                        <p className="ui-row-why">{meta.why}</p>
+                        {c.newerInconclusiveAttempt && c.lastAttempt && (
+                          <p className="ui-row-note">A newer attempt on {day(c.lastAttempt.at)} did not count ({c.lastAttempt.reasonCode ?? c.lastAttempt.failureClass ?? "blocked"}).</p>
+                        )}
+                        {c.quarantineReason && <p className="ui-row-note">{c.quarantineReason}</p>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="ui-card">
+        <div className="ui-card-head">
+          <h3>Quality baseline, last {quality.windowDays} days</h3>
+        </div>
+        <p className="subtle">{quality.note}</p>
+        <div className="ui-tiles">
+          <div className="ui-tile"><strong>{quality.checks.executed}</strong><span>checks ran on real tenants</span></div>
+          <div className="ui-tile good"><strong>{quality.checks.passed}</strong><span>passed</span></div>
+          <div className="ui-tile bad"><strong>{quality.checks.failed}</strong><span>failed</span></div>
+        </div>
+        <p className="ui-row-why">
+          {quality.functionalShareOfFailures === null
+            ? "None of the failures were recorded with a cause, so the share that are about Lawcus cannot be stated yet."
+            : `${quality.functionalShareOfFailures}% of the ${quality.functionalShareBasis} classified failures say Lawcus behaved differently.`}
+        </p>
+        {failureTotal > 0 && (
+          <ul className="ui-bars">
+            {Object.entries(quality.failuresByClass)
+              .filter(([, n]) => n > 0)
+              .map(([k, n]) => (
+                <li key={k}>
+                  <span className="ui-bar-label">{CLASS_LABEL[k] ?? k}</span>
+                  <span className="ui-bar"><span style={{ width: `${Math.round((n / failureTotal) * 100)}%` }} /></span>
+                  <span className="ui-bar-count">{n}</span>
+                </li>
+              ))}
+          </ul>
+        )}
+        {quality.flakyCases.length > 0 && (
+          <p className="ui-row-note">Passed and failed on the same code: {quality.flakyCases.join(", ")}</p>
+        )}
+      </div>
+    </section>
   );
 }
