@@ -1115,3 +1115,23 @@ footer {
 .plan-notices { display: grid; gap: 10px; margin: 12px 0; }
 .plan-notices .notice ul { margin: 6px 0 0 18px; }
 .fact-review, .change-signals { display: grid; gap: 16px; }
+
+/* Grouped navigation: wrap onto more rows instead of clipping on narrow screens. */
+.nav-wrap {
+  flex-wrap: wrap;
+  overflow: visible !important;
+}
+.top-nav {
+  height: auto !important;
+  flex-wrap: wrap;
+  row-gap: 6px;
+  padding: 8px 0 !important;
+}
+.top-nav > button {
+  white-space: nowrap;
+}
+.sub-nav {
+  height: auto !important;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
