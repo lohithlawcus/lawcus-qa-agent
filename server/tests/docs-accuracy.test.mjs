@@ -90,11 +90,11 @@ test("every tab the operator guide names is a real tab, and every top-level tab 
   const topLevel = [...read("app/page.tsx").matchAll(/<TabsTrigger value="(workspace|testbook|ai-usage|history|proposals|knowledge|review|api|personas|teach|safety|environment)"/g)];
   assert.equal(topLevel.length, labels.length);
   const guide = docs["docs/OPERATOR-GUIDE.md"];
-  for (const wording of ["Sign in and save verified account", "Check browser connection", "Build plan", "Use standard login checks", "I removed it", "Keep it", "Records left in staging", "Sweep now", "Record and analyze", "Propose a revision", "Flag for re-review", "Load example", "Approve"]) {
+  for (const wording of ["Sign in and save verified account", "Check browser connection", "Build plan", "Use standard login checks", "Mark as removed in Lawcus", "Keep it", "Records left in staging", "Sweep now", "Record and analyze", "Propose a revision", "Flag for re-review", "Load example", "Approve"]) {
     assert.ok(guide.includes(wording), `the guide should mention "${wording}"`);
   }
   const ui = read("app/page.tsx") + read("app/secure-setup.tsx") + read("components/staging-sweep.tsx") + read("components/change-signals.tsx");
-  for (const wording of ["Sign in and save verified account", "Check browser connection", "Build plan", "Use standard login checks", "I removed it", "Keep it", "Sweep now", "Record and analyze", "Propose a revision", "Flag for re-review", "Load example"]) {
+  for (const wording of ["Sign in and save verified account", "Check browser connection", "Build plan", "Use standard login checks", "Mark as removed in Lawcus", "Keep it", "Sweep now", "Record and analyze", "Propose a revision", "Flag for re-review", "Load example"]) {
     assert.ok(ui.includes(wording), `the UI no longer says "${wording}", which the operator guide quotes`);
   }
   assert.ok(/RECORDS LEFT IN STAGING/.test(ui), "the leftovers heading the guide describes exists");
