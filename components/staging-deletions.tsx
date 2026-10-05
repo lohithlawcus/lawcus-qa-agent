@@ -26,6 +26,8 @@ export function StagingDeletions() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [armed, setArmed] = useState(false);
+  const [understood, setUnderstood] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -61,6 +63,26 @@ export function StagingDeletions() {
     }
   }
 
+  // The server deletes the oldest approved record, the same one shown first here.
+  const next = list.approved[0];
+  async function runNext() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await request<{ deleted: number; failed: number; message: string | null }>("/deletions/run", {});
+      if (result.deleted > 0) setNotice("Deleted from Lawcus and recorded.");
+      else setError(result.message ?? "Nothing was deleted. The record stays approved.");
+      setArmed(false);
+      setUnderstood(false);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The deletion could not be run.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const empty = list.approved.length === 0 && list.candidates.length === 0;
   return (
     <div className="panel" style={{ marginBottom: 16 }}>
@@ -78,6 +100,32 @@ export function StagingDeletions() {
       {error && (
         <div className="notice error" role="alert">
           <p>{error}</p>
+        </div>
+      )}
+      {next && !armed && (
+        <div className="inline" style={{ marginBottom: 12 }}>
+          <Button variant="destructive" disabled={busy} onClick={() => setArmed(true)}>
+            Delete one approved record…
+          </Button>
+        </div>
+      )}
+      {next && armed && (
+        <div className="notice error" role="alert" style={{ marginBottom: 12 }}>
+          <p>
+            This deletes <strong>{next.display_name ?? next.resource_id}</strong> from Lawcus. It cannot be undone. Only one record is deleted per click.
+          </p>
+          <label className="inline" style={{ marginTop: 8 }}>
+            <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
+            <span>I understand this cannot be undone</span>
+          </label>
+          <div className="inline" style={{ marginTop: 10 }}>
+            <Button variant="destructive" disabled={busy || !understood} onClick={() => void runNext()}>
+              Delete from Lawcus
+            </Button>
+            <Button variant="outline" disabled={busy} onClick={() => { setArmed(false); setUnderstood(false); }}>
+              Cancel
+            </Button>
+          </div>
         </div>
       )}
       {empty ? (

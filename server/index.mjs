@@ -1,4 +1,4 @@
-import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession,runStagingSweepRead} from './core/live-runner.mjs';
+import {runLive,checkBrowser,liveDescriptions,connectInBrowser,verifyPersonaInBrowser,startAuthoringSession,runStagingSweepRead,lawcusDeleteHandlers} from './core/live-runner.mjs';
 import { z } from "zod";
 import { seedLawcusNativeCases, buildNativeRunners, PROTECTED_RESOURCE_IDS } from './testbook/lawcus-native-cases.mjs';
 import { planImpactedTest, proposeGapCoverage, executeImpactedTest } from './core/impacted-testing.mjs';
@@ -157,6 +157,7 @@ const stagingSweeps = openStagingSweeps(db, audit, { protectedResourceIds: PROTE
 const resourceLocks = openResourceLocks(db, audit);
 const mutationJournal = openMutationJournal(db, audit);
 const cleanupRunner = createCleanupRunner({ resourceOwnership, mutationJournal, resourceLocks });
+let deletionInFlight = false;
 // A lock left 'held' by a run that crashed before releasing it (matching
 // store.mjs's own stale-run recovery) is recoverable, never a permanent
 // deadlock (section 26).
@@ -1205,6 +1206,33 @@ const server = createServer(
           if (error?.code === "not_found") { json(res, 404, { error: error.message }); return; }
           if (error?.code && /^(not_pending|kept_on_purpose|protected_resource|not_approved|non_human_approver|no_approver)$/.test(error.code)) { json(res, 409, { error: error.message }); return; }
           throw error;
+        }
+        return;
+      }
+      // Carries out ONE approved deletion per request, through the Lawcus handler.
+      // Refused while another staging operation runs, while the preflight fails, or
+      // when the shared sign-in budget is spent (deletions count as sign-ins).
+      if (req.method === "POST" && pathname === "/deletions/run") {
+        if (deletionInFlight) { json(res, 409, { error: "A deletion is already running." }); return; }
+        if (connecting() || savingCredentials || checkingBrowser || stagingBusy(db)) { json(res, 409, { error: "Wait for the active operation to finish before deleting." }); return; }
+        if (resourceOwnership.approvedForDeletion("lawcus").length === 0) { json(res, 409, { error: "Nothing is approved for deletion." }); return; }
+        const pre = await runPreflight({ artifactDirectory });
+        if (!pre.ok) { json(res, 409, { error: preflightMessage(pre) }); return; }
+        const budget = checkStagingBudget(db, "lawcus");
+        const recentDeletions = db.prepare("SELECT COUNT(*) n FROM audit_events WHERE action='deletion.run' AND created_at>?").get(new Date(Date.now() - 600000).toISOString()).n;
+        if (!budget.ok || budget.recent + recentDeletions >= budget.limit) { json(res, 429, { error: "Three staging sign-ins were used in ten minutes. Please wait before deleting." }); return; }
+        deletionInFlight = true;
+        try {
+          const result = await cleanupRunner.runApprovedDeletions({ environmentId: "lawcus", limit: 1, deleteHandlers: lawcusDeleteHandlers() });
+          audit("deletion.run", approverIdentity, { deleted: result.deleted.length, failed: result.failed.length, waiting: result.waiting.length });
+          json(res, 200, {
+            deleted: result.deleted.length,
+            failed: result.failed.length,
+            waiting: result.waiting.length,
+            message: result.failed[0]?.cleanup_note ?? null,
+          });
+        } finally {
+          deletionInFlight = false;
         }
         return;
       }

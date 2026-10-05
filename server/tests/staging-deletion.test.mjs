@@ -208,3 +208,22 @@ test("the Lawcus delete handler is registered for contacts only", () => {
   assert.equal(handlers.matter, undefined, "matters are not deletable yet");
   assert.equal(handlers.lead, undefined, "leads are not deletable yet");
 });
+
+test("runApprovedDeletions with a limit carries out only that many approved deletions, oldest first", async () => {
+  await withEnv(async ({ db, resourceOwnership, cleanup }) => {
+    const runId = seedRun(db);
+    const first = ownContact(resourceOwnership, runId);
+    const second = ownContact(resourceOwnership, runId);
+    resourceOwnership.approveDeletion(first.id, { approver: HUMAN });
+    resourceOwnership.approveDeletion(second.id, { approver: HUMAN });
+    const calls = [];
+    const result = await cleanup.runApprovedDeletions({
+      environmentId: "lawcus",
+      limit: 1,
+      deleteHandlers: { contact: async (r) => { calls.push(r.id); return {}; } },
+    });
+    assert.equal(result.deleted.length, 1);
+    assert.deepEqual(calls, [first.id], "oldest approved record first");
+    assert.equal(db.prepare("SELECT cleanup_status FROM resource_ownership WHERE id=?").get(second.id).cleanup_status, "pending");
+  });
+});
