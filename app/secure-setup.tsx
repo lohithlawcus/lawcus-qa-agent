@@ -31,7 +31,7 @@ const API = "http://127.0.0.1:4319";
 // "key saved" labels come from the status only.
 const AI_PROVIDER_OPTIONS = [
   { id: "openai", label: "OpenAI", keyPage: "https://platform.openai.com/api-keys", defaultModel: "gpt-4.1-mini" },
-  { id: "openrouter", label: "OpenRouter", keyPage: "https://openrouter.ai/keys", defaultModel: "openai/gpt-4.1-mini" },
+  { id: "openrouter", label: "OpenRouter", keyPage: "https://openrouter.ai/keys", defaultModel: "google/gemma-4-31b-it:free" },
   { id: "anthropic", label: "Anthropic", keyPage: "https://console.anthropic.com/settings/keys", defaultModel: "claude-sonnet-4-5" },
 ];
 async function call(
