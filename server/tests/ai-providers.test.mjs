@@ -79,3 +79,12 @@ test('the saved AI choice defaults to OpenAI, round-trips, and rejects an unknow
   rmSync(dir,{recursive:true,force:true});
  }
 });
+
+test('the Keychain helper and the Node allowlist name the same accounts (or the helper refuses the new ones)',async()=>{
+ const {readFileSync:read}=await import('node:fs');
+ const names=(file,pattern)=>{const m=pattern.exec(read(new URL(file,import.meta.url),'utf8'));return m?[...m[1].matchAll(/'([^']+)'|"([^"]+)"/g)].map(x=>x[1]??x[2]).sort():[];};
+ const nodeList=names('../core/secrets.mjs',/const accounts=new Set\(\[([^\]]+)\]\)/);
+ const swiftList=names('../native/Keychain.swift',/let allowed = Set\(\[([^\]]+)\]\)/);
+ for(const id of AI_PROVIDER_IDS)assert.ok(nodeList.includes(AI_PROVIDERS[id].account),`${AI_PROVIDERS[id].account} missing from secrets.mjs`);
+ for(const account of nodeList.filter(a=>!a.startsWith('lawcus-persona')))assert.ok(swiftList.includes(account),`${account} missing from Keychain.swift`);
+});
