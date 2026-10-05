@@ -30,8 +30,11 @@ async function readOneList(context, spec, cutoffText) {
   let truncated = false;
   // A response for this list at this offset. Registered BEFORE the action that
   // causes it, so a fast answer is never missed.
-  const listResponse = (skip) =>
-    page.waitForResponse(
+  // The wait is started before the page action it depends on. If that action fails first,
+  // this promise rejects with nothing awaiting it, which would stop the whole service, so
+  // a handler is attached here; the caller still sees the error when it awaits.
+  const listResponse = (skip) => {
+    const wait = page.waitForResponse(
       (response) => {
         const request = response.request();
         if (request.method() !== "POST" || new URL(response.url()).pathname !== spec.endpoint) return false;
@@ -43,6 +46,9 @@ async function readOneList(context, spec, cutoffText) {
       },
       { timeout: 30000 },
     );
+    wait.catch(() => {});
+    return wait;
+  };
   try {
     let waiting = listResponse(0);
     await page.goto(STAGING + spec.path, { waitUntil: "domcontentloaded" });
