@@ -86,16 +86,19 @@ export function createCleanupRunner({ resourceOwnership, mutationJournal, resour
    * approved and pending — not marked skipped — so the approval waits for a
    * handler instead of being consumed. Each delete is recorded on its own
    * row; one failure does not stop the rest. */
-  async function runApprovedDeletions({ deleteHandlers = {}, environmentId = null }) {
+  async function runApprovedDeletions({ deleteHandlers = {}, environmentId = null, limit = Infinity }) {
     const deleted = [];
     const failed = [];
     const waiting = [];
+    let attempted = 0;
     for (const resource of resourceOwnership.approvedForDeletion(environmentId)) {
+      if (attempted >= limit) break;
       const handler = deleteHandlers[resource.resource_type];
       if (!handler) {
         waiting.push(resource);
         continue;
       }
+      attempted += 1;
       try {
         const outcome = await handler(resource);
         resourceOwnership.markCleanup(resource.id, {
