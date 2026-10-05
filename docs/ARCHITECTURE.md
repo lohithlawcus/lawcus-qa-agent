@@ -125,6 +125,7 @@ The control service serves these route families. Every browser request needs the
 | `/personas` | verified personas |
 | `/authoring` | teach / record sessions |
 | `/leftovers` | records a run left behind |
+| `/deletions` | approve or withdraw deletion of a staging record a person chose (records only; deletion runs separately) |
 | `/sweeps` | read-only staging sweep |
 | `/coverage` | read-only coverage and quality report from the run history |
 | `/clarifications` | answer a clarification |

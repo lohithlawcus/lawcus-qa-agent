@@ -1183,6 +1183,31 @@ const server = createServer(
         }
         return;
       }
+      // Deleting a staging record a person has approved, one record at a time.
+      // These routes only read the list or record the approval/withdrawal; the
+      // delete itself runs separately (cleanup.mjs runApprovedDeletions), and
+      // nothing here touches Lawcus. Approval is human-only (resource-ownership.mjs).
+      if (req.method === "GET" && pathname === "/deletions") {
+        json(res, 200, {
+          approved: resourceOwnership.approvedForDeletion("lawcus").map(withOpenUrl),
+          candidates: resourceOwnership.allLeftovers().filter((r) => r.cleanup_policy === "manual" && r.cleanup_status === "pending").map(withOpenUrl),
+        });
+        return;
+      }
+      const deletionDecision = /^\/deletions\/([a-f0-9-]{36})\/(approve|revoke)$/.exec(pathname);
+      if (req.method === "POST" && deletionDecision) {
+        try {
+          const row = deletionDecision[2] === "approve"
+            ? resourceOwnership.approveDeletion(deletionDecision[1], { approver: approverIdentity })
+            : resourceOwnership.revokeDeletion(deletionDecision[1], { approver: approverIdentity });
+          json(res, 200, { record: withOpenUrl(row) });
+        } catch (error) {
+          if (error?.code === "not_found") { json(res, 404, { error: error.message }); return; }
+          if (error?.code && /^(not_pending|kept_on_purpose|protected_resource|not_approved|non_human_approver|no_approver)$/.test(error.code)) { json(res, 409, { error: error.message }); return; }
+          throw error;
+        }
+        return;
+      }
       // V5 Upgrade Phase U1 — the AI Gate's own kill switch. Human-only
       // (aiGate.setEnabled refuses a non-human approverIdentity the same
       // way every other decision route does), and every toggle is
