@@ -54,6 +54,7 @@ import { FactReview } from "@/components/fact-review";
 import { ChangeSignals } from "@/components/change-signals";
 import { StagingSweep } from "@/components/staging-sweep";
 import { CoverageReport } from "@/components/coverage-report";
+import { StagingDeletions } from "@/components/staging-deletions";
 import { PlanNotices, isBlocked, type PlanBlocker, type PlanReviewRequest } from "@/components/plan-notices";
 type Run = {
   id: string;
@@ -1666,6 +1667,7 @@ export default function Home() {
             </div>
           </TabsContent>
           <TabsContent value="history">
+            <StagingDeletions />
             {state?.leftovers?.length
               ? renderOwned(
                   state.leftovers,
