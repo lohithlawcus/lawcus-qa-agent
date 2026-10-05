@@ -101,6 +101,9 @@ export function permitContactsDeleteRequest(url,method,resourceType,postData){
  if(u.protocol!=='https:'||u.username||u.password||u.port||u.origin!==API_ORIGIN)return false;
  return method==='DELETE'&&/^\/contacts\/[a-f0-9-]{36}$/.test(u.pathname);
 }
+// One signed-in session under the contacts policy (used by the supervised
+// end-to-end test to create a record through the tool's own create code).
+export function withLoggedInCreateContext(work){return withLoggedInContext(permitContactsRequest,work);}
 // V5 Step 15 — same shape as permitContactsRequest, but for Leads: the
 // real lawcus.leads.update call is PUT /leads with no :uuid in the path
 // (the target lead is identified by matter_uuid in the body instead), so
