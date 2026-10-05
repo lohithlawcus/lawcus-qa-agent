@@ -2424,6 +2424,11 @@ export default function Home() {
           </TabsContent>
           <TabsContent value="safety">
             <CoverageReport />
+            <details className="ui-fold-wrap">
+              <summary className="ui-fold-summary">
+                <strong>Guardrails, clarifications and audit history</strong>
+                <span className="subtle">Boundaries, remaining work, open questions and the action log</span>
+              </summary>
             <div className="ui-grid-2">
               <div className="ui-card">
                 <span className="section-label">ENFORCED IN THIS VERSION</span>
@@ -2527,6 +2532,7 @@ export default function Home() {
                 </p>
               )}
             </div>
+            </details>
           </TabsContent>
           <TabsContent value="environment">
             <SecureSetup

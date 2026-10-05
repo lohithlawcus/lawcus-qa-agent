@@ -47,10 +47,11 @@ const STATE = {
 } as const;
 type StateKey = keyof typeof STATE;
 
-const LANES: { title: string; hint: string; states: StateKey[] }[] = [
-  { title: "Counts as coverage", hint: "These are what we can point to today.", states: ["covered"] },
-  { title: "Needs attention", hint: "Something here needs a re-run or a look.", states: ["failing", "stale", "inconclusive"] },
-  { title: "Not counted yet", hint: "Not run, held back, or waiting for approval.", states: ["never_run_on_staging", "quarantined", "not_approved"] },
+// Needs attention comes first and opens by default; the other lanes stay folded until asked for.
+const LANES: { title: string; hint: string; states: StateKey[]; open: boolean }[] = [
+  { title: "Needs attention", hint: "Something here needs a re-run or a look.", states: ["failing", "stale", "inconclusive"], open: true },
+  { title: "Counts as coverage", hint: "These are what we can point to today.", states: ["covered"], open: false },
+  { title: "Not counted yet", hint: "Not run, held back, or waiting for approval.", states: ["never_run_on_staging", "quarantined", "not_approved"], open: false },
 ];
 
 const CLASS_LABEL: Record<string, string> = {
@@ -114,6 +115,7 @@ export function CoverageReport() {
 
   const { summary, quality } = report;
   const failureTotal = Object.values(quality.failuresByClass).reduce((a, b) => a + b, 0);
+  const attention = report.cases.filter((c) => LANES[0].states.includes(c.state as StateKey)).length;
   return (
     <section className="ui-stack">
       <div className="ui-hero">
@@ -133,6 +135,11 @@ export function CoverageReport() {
                 </span>
               ))}
           </div>
+          <p className="ui-next">
+            {attention === 0
+              ? "Nothing needs attention right now."
+              : `${attention} ${attention === 1 ? "check needs" : "checks need"} a re-run or a look. Start with Needs attention below.`}
+          </p>
         </div>
       </div>
 
@@ -140,11 +147,11 @@ export function CoverageReport() {
         {LANES.map((lane) => {
           const rows = report.cases.filter((c) => lane.states.includes(c.state as StateKey));
           return (
-            <div className="ui-card" key={lane.title}>
-              <div className="ui-card-head">
+            <details className="ui-card ui-fold" key={lane.title} open={lane.open}>
+              <summary className="ui-card-head">
                 <h3>{lane.title}</h3>
                 <span className="ui-count">{rows.length}</span>
-              </div>
+              </summary>
               <p className="subtle">{lane.hint}</p>
               {rows.length === 0 ? (
                 <p className="subtle ui-empty">Nothing here.</p>
@@ -172,15 +179,15 @@ export function CoverageReport() {
                   })}
                 </ul>
               )}
-            </div>
+            </details>
           );
         })}
       </div>
 
-      <div className="ui-card">
-        <div className="ui-card-head">
+      <details className="ui-card ui-fold">
+        <summary className="ui-card-head">
           <h3>Quality baseline, last {quality.windowDays} days</h3>
-        </div>
+        </summary>
         <p className="subtle">{quality.note}</p>
         <div className="ui-tiles">
           <div className="ui-tile"><strong>{quality.checks.executed}</strong><span>checks ran on real tenants</span></div>
@@ -208,7 +215,7 @@ export function CoverageReport() {
         {quality.flakyCases.length > 0 && (
           <p className="ui-row-note">Passed and failed on the same code: {quality.flakyCases.join(", ")}</p>
         )}
-      </div>
+      </details>
     </section>
   );
 }
