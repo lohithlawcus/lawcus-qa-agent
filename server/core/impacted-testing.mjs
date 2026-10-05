@@ -61,12 +61,33 @@ const MATTER_FOR_CONTACT_CELLS = [
   { featureName: "Matters", recordState: "new", externalId: "matters.create_mandatory_field_validation" },
 ];
 
+// The "Create Contact - Person" suite (server/testbook/lawcus-native-cases.mjs's
+// NATIVE_SUITE_MEMBERS). Requests such as "test creating a person type contact"
+// plan those five approved, runnable cases for real. Widening this is a reviewable
+// code change, same as the patterns above.
+const CONTACT_PERSON_CREATE_INTENT =
+  /^(?:test|check|verify|run)\s+(?:the\s+)?(?:cases?\s+for\s+|tests?\s+for\s+)?(?:creating|create|adding|add)\s+(?:a\s+|an\s+)?(?:new\s+)?person(?:\s+type)?\s+contacts?(?:\s+cases?)?\.?$/i;
+
+const CONTACT_PERSON_CREATE_CELLS = [
+  "contacts.create_new_verifies_custom_fields",
+  "contacts.create_mandatory_field_validation",
+  "contacts.create_all_fields_verified_on_detail_page",
+  "contacts.create_phone_number_validation",
+  "contacts.create_billing_rate_required_validation",
+].map((externalId) => ({ featureName: "Contacts", recordState: "new", externalId }));
+
 const KNOWN_IMPACT_PATTERNS = [
   {
     id: "contact_custom_field_impacted",
     subjectFeatureName: "Contact Custom Fields",
     test: (normalized) => CONTACT_CUSTOM_FIELD_IMPACT_INTENT.test(normalized),
     cells: CONTACT_CUSTOM_FIELD_CELLS,
+  },
+  {
+    id: "contact_person_create",
+    subjectFeatureName: "Contacts",
+    test: (normalized) => CONTACT_PERSON_CREATE_INTENT.test(normalized),
+    cells: CONTACT_PERSON_CREATE_CELLS,
   },
   {
     id: "matter_for_contact",
