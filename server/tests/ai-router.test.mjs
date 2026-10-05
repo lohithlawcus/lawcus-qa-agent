@@ -11,7 +11,7 @@ import { createOpenAIProvider } from "../ai/providers/openai.mjs";
 test("the production TASK_POLICY only routes the one task this app actually has, to the cheap tier", () => {
   assert.deepEqual(Object.keys(TASK_POLICY), ["planLogin"]);
   assert.equal(TASK_POLICY["planLogin"].provider, "openai");
-  assert.equal(TASK_POLICY["planLogin"].model, "gpt-4.1-mini");
+  assert.equal(TASK_POLICY["planLogin"].model, "gpt-6-luna");
 });
 
 test("run() dispatches to whichever provider a policy names — swapping the provider under a policy key needs no router or call-site change", async () => {
@@ -83,7 +83,7 @@ test("run() against the real OpenAI provider still returns the same shape the ol
   assert.equal(result.source, "openai");
   assert.equal(result.modelCalls, 1);
   assert.deepEqual(result.plan.scenarios, ["valid_login"]);
-  assert.equal(result.usage.model, "gpt-4.1-mini");
+  assert.equal(result.usage.model, TASK_POLICY.planLogin.model);
   assert.equal(result.usage.inputTokens, 5);
 });
 

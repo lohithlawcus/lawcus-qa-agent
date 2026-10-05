@@ -1,6 +1,6 @@
 # Architecture
 
-**As of 26 September 2026, commit `262dcab` (master).** This describes what the code does now. `DELIVERY-STATUS.md` says what has actually been verified.
+**As of 29 September 2026, commit `2529b3e` (baseline).** This includes the later AI safety changes in this branch. `DELIVERY-STATUS.md` says what has actually been verified on staging.
 
 The tool is a single-user application on one Mac. A React workspace talks to a loopback control API; a Node service owns a SQLite database, a Playwright runner, the macOS Keychain helper and an MCP server. Nothing is hosted.
 
@@ -79,7 +79,9 @@ It also gives a 90-day quality baseline: failures by class with their denominato
 
 ## AI use
 
-AI is used only to plan login checks, through a router that names the provider and model (`server/ai/router.mjs`: OpenAI, `gpt-4.1-mini`). The request uses the Responses API with storage disabled and strict validated JSON. Only the operator's request text and the fixed login contract are sent, never browser contents, credentials or evidence. A guard refuses a request that contains anything credential-shaped. No model-generated code or assertion is ever executed, and browser execution and replay use zero model calls. Every model call is logged, and the **AI switch** (`/ai-gate`) can turn all AI use off; the standard plan needs no AI.
+AI is used only to plan login checks, through a router that names the provider and model (`server/ai/router.mjs`: OpenAI, `gpt-6-luna`). The request uses the Responses API with storage disabled and strict validated JSON. Only the operator's request text and the fixed login contract are sent, never browser contents, credentials or evidence. A guard refuses a request that contains anything credential-shaped. No model-generated code or assertion is ever executed, and browser execution and replay use zero model calls. Every model call is logged, and the **AI switch** (`/ai-gate`) can turn all AI use off; the standard plan needs no AI.
+
+The AI Gate records a started event before each model request and a completed or failed event afterward. A local SHA-256 chain links salted hashes and bounded metadata without storing prompts or responses. It detects accidental or partial edits to these rows; anyone able to rewrite the database can recompute the hashes, so this is not immutable storage. The gate refuses model calls if ledger verification fails, if an unknown AI task is requested, after three provider/validation failures in ten minutes, or after 20 model requests in one hour. These conditions open a persisted circuit and an incident visible in AI Usage. A human operator must re-enable AI to reset the pause. Operator-disabled AI stays disabled across migrations and restarts. Residual risks are listed in `ai_residual_risks`; the initial entries do not claim to be a complete risk assessment.
 
 ## MCP tools
 
@@ -152,6 +154,7 @@ The service applies these in order at startup. The schema version is the highest
 | `023_failure_classes.sql` | failure class and reason code on results |
 | `024_fact_scope.sql` | fact scope |
 | `025_staging_sweeps.sql` | sweeps and their findings |
+| `026_ai_safety.sql` | AI decision integrity chain, circuit state, incidents and residual risks |
 
 ## Where things are
 

@@ -2,6 +2,13 @@ import { readSecret } from "../../core/secrets.mjs";
 import { AIPlan, ALLOWED_SCENARIOS } from "../schemas/login-plan.mjs";
 import { containsSecret } from "../../core/redact.mjs";
 
+export class AiProviderInputError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+
 // V5 Step 8 / section 33 — one concrete AIProvider. Every provider module
 // exposes named task methods matching a policy's task name (see
 // server/ai/router.mjs); the router chooses which provider and model to
@@ -23,7 +30,8 @@ export function createOpenAIProvider({ getSecret = readSecret, request = fetch }
         // QA password typed with no label around it.
         containsSecret(intent)
       )
-        throw new Error(
+        throw new AiProviderInputError(
+          "unsafe_input",
           "Remove credentials from the test instruction. Enter them only in secure setup.",
         );
       const key = await getSecret("openai-api");
@@ -130,7 +138,7 @@ export function createOpenAIProvider({ getSecret = readSecret, request = fetch }
           throw new Error(
             "The proposed plan exceeded the permitted login-attempt policy.",
           );
-        if (plan.clarification) throw new Error(plan.clarification);
+        if (plan.clarification) throw new AiProviderInputError("unsupported_request", plan.clarification);
         return {
           plan: { title: plan.title, scenarios: plan.scenarios },
           summary: plan.summary,

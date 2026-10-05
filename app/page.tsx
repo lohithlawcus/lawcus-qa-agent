@@ -265,6 +265,14 @@ type AiUsageSummary = {
     error_code: string | null;
     created_at: string;
   }[];
+  safety: {
+    circuit: { circuit_open: number; reason_code: string | null; opened_at: string | null; reset_by: string | null };
+    ledger: { intact: boolean; records: number; firstInvalidSequence: number | null };
+    incidents: { id: string; severity: string; status: string; reason_code: string; opened_at: string; closed_by: string | null }[];
+    risks: { id: string; description: string; mitigation: string; status: string; review_owner: string }[];
+    hourlyCalls: number;
+    hourlyLimit: number;
+  };
 };
 type Manifest = {
   version: number;
@@ -561,6 +569,8 @@ export default function Home() {
     else if (plan) await runTest(plan.id);
   }
   async function toggleAiGate(enabled: boolean) {
+    if (enabled && state?.aiUsage.safety.circuit.circuit_open &&
+        !window.confirm("Review the safety incident before resetting the pause and enabling AI. Continue?")) return;
     await action(async () => {
       await request("/ai-gate/toggle", { enabled });
       await refresh();
@@ -1605,22 +1615,39 @@ export default function Home() {
               <span className="section-label">KILL SWITCH</span>
               <div className="list-row">
                 <div>
-                  <h3>{state?.aiUsage.aiEnabled ? "AI Enabled" : "AI Disabled"}</h3>
+                  <h3>{state?.aiUsage.safety.circuit.circuit_open ? "AI Safety Pause" : state?.aiUsage.aiEnabled ? "AI Enabled" : "AI Disabled"}</h3>
                   <p className="subtle">
-                    {state?.aiUsage.aiEnabled
+                    {state?.aiUsage.safety.circuit.circuit_open
+                      ? "A safety incident paused model calls. Review the incident below before re-enabling AI."
+                      : state?.aiUsage.aiEnabled
                       ? "AI may be used only for genuinely novel prompts the local router can't resolve. Known regression never reaches it."
                       : "AI is fully disabled. An unrecognized prompt returns an error instead of calling a model."}
                   </p>
                 </div>
                 <Button
                   variant={state?.aiUsage.aiEnabled ? "outline" : undefined}
-                  disabled={busy}
-                  onClick={() => toggleAiGate(!state?.aiUsage.aiEnabled)}
+                  disabled={busy || state?.aiUsage.safety.ledger.intact === false}
+                  onClick={() => toggleAiGate(state?.aiUsage.safety.circuit.circuit_open ? true : !state?.aiUsage.aiEnabled)}
                 >
                   <Power />
-                  {state?.aiUsage.aiEnabled ? "Disable AI" : "Enable AI"}
+                  {state?.aiUsage.safety.circuit.circuit_open ? "Review and enable AI" : state?.aiUsage.aiEnabled ? "Disable AI" : "Enable AI"}
                 </Button>
               </div>
+            </div>
+            <div className="panel">
+              <span className="section-label">SAFETY MONITOR</span>
+              <div className="inline">
+                <Badge variant="outline">{state?.aiUsage.safety.ledger.intact ? "Ledger integrity OK" : "Ledger needs investigation"}</Badge>
+                <Badge variant="outline">{state?.aiUsage.safety.ledger.records ?? 0} decision records</Badge>
+                <Badge variant="outline">{state?.aiUsage.safety.hourlyCalls ?? 0} / {state?.aiUsage.safety.hourlyLimit ?? 0} AI requests this hour</Badge>
+              </div>
+              {state?.aiUsage.safety.incidents.filter((incident) => incident.status === "open").map((incident) => (
+                <div className="list-row" key={incident.id}>
+                  <div><h3>{incident.reason_code.replaceAll("_", " ")}</h3><p className="subtle">{incident.severity} · Opened {date(incident.opened_at)}</p></div>
+                  <Badge variant="outline">Open incident</Badge>
+                </div>
+              ))}
+              <p className="subtle">Residual risks: {state?.aiUsage.safety.risks.filter((risk) => risk.status === "open").map((risk) => risk.description).join(" ") || "None recorded."}</p>
             </div>
             <div className="panel">
               <span className="section-label">LAST 24 HOURS</span>
