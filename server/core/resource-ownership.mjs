@@ -18,6 +18,18 @@ export class ResourceOwnershipError extends Error {
 
 const CLEANUP_POLICIES = new Set(["auto", "manual", "retain"]);
 
+// Deleting staging data is never something an automated actor may approve:
+// the AI, the runner, the network observer and the MCP server can all
+// propose, but only a named human operator can approve a deletion.
+const NON_HUMAN_DELETION_APPROVERS = new Set(["ai_extraction", "ai_planner", "runner", "network_observer", "mcp"]);
+
+function requireHumanApproverForDeletion(approver) {
+  if (!approver || typeof approver !== "string")
+    throw new ResourceOwnershipError("no_approver", "A deletion needs a named approver.");
+  if (NON_HUMAN_DELETION_APPROVERS.has(approver) || !approver.startsWith("operator:"))
+    throw new ResourceOwnershipError("non_human_approver", "Only a named human operator can approve a staging deletion.");
+}
+
 /**
  * Orders a set of ownership rows so a child is always cleaned before its
  * parent (section 28: "reverse dependency order") — Kahn's algorithm run
@@ -172,5 +184,67 @@ export function openResourceOwnership(db, audit, { protectedResourceIds = [] } =
     return db.prepare("SELECT * FROM resource_ownership WHERE id=?").get(id);
   }
 
-  return { recordCreated, markCleanup, forRun, pendingCleanupForRun, leftoversForRun, allLeftovers, resolveLeftover };
+  /** A record may be deleted from staging only after a person approves it,
+   * one record at a time. Only records the tool itself recorded at creation
+   * (by exact ID) can be approved — never a name match, and never a
+   * protected fixture (which cannot be recorded at all). Approval only flips
+   * the record to cleanup_policy 'auto'; nothing is deleted here. The actual
+   * delete runs later in runApprovedDeletions (cleanup.mjs), which skips any
+   * record whose type has no delete handler and leaves it approved, so an
+   * approval is never silently consumed. */
+  function approveDeletion(id, { approver }) {
+    requireHumanApproverForDeletion(approver);
+    const row = db.prepare("SELECT * FROM resource_ownership WHERE id=?").get(id);
+    if (!row) throw new ResourceOwnershipError("not_found", "No such owned record.");
+    if (row.cleanup_status !== "pending")
+      throw new ResourceOwnershipError("not_pending", `This record is already ${row.cleanup_status}; only a pending record can be approved for deletion.`);
+    if (row.cleanup_policy === "retain")
+      throw new ResourceOwnershipError("kept_on_purpose", "This record was kept on purpose. Revoke that decision before approving it for deletion.");
+    if (protectedIds.has(row.resource_id))
+      throw new ResourceOwnershipError("protected_resource", "A protected QA fixture can never be approved for deletion.");
+    db.prepare("UPDATE resource_ownership SET cleanup_policy='auto',cleanup_note=? WHERE id=?").run(
+      `Approved for deletion by ${approver} on ${now()}`,
+      id,
+    );
+    audit?.("resource.deletion_approved", id, { approver, resourceType: row.resource_type });
+    return db.prepare("SELECT * FROM resource_ownership WHERE id=?").get(id);
+  }
+
+  /** Withdraws an approval that has not been carried out yet. */
+  function revokeDeletion(id, { approver }) {
+    requireHumanApproverForDeletion(approver);
+    const row = db.prepare("SELECT * FROM resource_ownership WHERE id=?").get(id);
+    if (!row) throw new ResourceOwnershipError("not_found", "No such owned record.");
+    if (row.cleanup_status !== "pending" || row.cleanup_policy !== "auto")
+      throw new ResourceOwnershipError("not_approved", "Only a pending, approved record can have its approval withdrawn.");
+    db.prepare("UPDATE resource_ownership SET cleanup_policy='manual',cleanup_note=? WHERE id=?").run(
+      `Approval withdrawn by ${approver} on ${now()}`,
+      id,
+    );
+    audit?.("resource.deletion_revoked", id, { approver });
+    return db.prepare("SELECT * FROM resource_ownership WHERE id=?").get(id);
+  }
+
+  /** Approved records still waiting for their delete, in dependency order. */
+  function approvedForDeletion(environmentId = null) {
+    const rows = db
+      .prepare(
+        "SELECT * FROM resource_ownership WHERE cleanup_policy='auto' AND cleanup_status='pending' AND (? IS NULL OR environment_id=?) ORDER BY created_at",
+      )
+      .all(environmentId, environmentId);
+    return reverseDependencyOrder(rows);
+  }
+
+  return {
+    recordCreated,
+    markCleanup,
+    forRun,
+    pendingCleanupForRun,
+    leftoversForRun,
+    allLeftovers,
+    resolveLeftover,
+    approveDeletion,
+    revokeDeletion,
+    approvedForDeletion,
+  };
 }

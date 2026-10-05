@@ -4,7 +4,7 @@
 
 ## What this tool is, and is not
 
-It runs checks against the Lawcus staging site in a real browser, keeps the evidence, and helps you keep a list of what Lawcus is supposed to do (its "Knowledge"). It **never approves anything itself**, never changes what a check expects, and never deletes anything in Lawcus. Every decision that matters is yours.
+It runs checks against the Lawcus staging site in a real browser, keeps the evidence, and helps you keep a list of what Lawcus is supposed to do (its "Knowledge"). It **never approves anything itself**, never changes what a check expects, and does not delete anything in Lawcus on its own. Any future deletion needs your named approval for each record; that path is designed but not yet available. Every decision that matters is yours.
 
 It is one Mac, one dedicated test account, one run at a time. It is not complete coverage of Lawcus. `DELIVERY-STATUS.md` says exactly what has been verified.
 
@@ -71,7 +71,7 @@ Open a run in **Run history** to see its results, screenshots and traces. Screen
 
 ## Records left in Lawcus
 
-Some checks create records in Lawcus (a contact, a lead, a matter). The tool writes each one down as soon as it exists. It **never deletes them**.
+Some checks create records in Lawcus (a contact, a lead, a matter). The tool writes each one down as soon as it exists. It **does not delete them on its own**; deleting one is a decision for you, and the approval path that would allow it is designed but not yet available.
 
 - In **Run history**, **Records left in staging** lists what runs created and Lawcus still holds. Remove a record in Lawcus yourself, then press **I removed it**; or press **Keep it** if it should stay.
 - If a create was clicked but never confirmed, a "may exist" entry tells you what name to search for.

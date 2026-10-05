@@ -80,5 +80,39 @@ export function createCleanupRunner({ resourceOwnership, mutationJournal, resour
     return { overall, deleted, failed, restored, restorationFailed, leftovers };
   }
 
-  return { runCleanup };
+  /** Carries out deletions a person has approved (resource-ownership.mjs's
+   * approveDeletion). Only approved, still-pending records are touched, in
+   * dependency order. A record whose type has no delete handler is left
+   * approved and pending — not marked skipped — so the approval waits for a
+   * handler instead of being consumed. Each delete is recorded on its own
+   * row; one failure does not stop the rest. */
+  async function runApprovedDeletions({ deleteHandlers = {}, environmentId = null }) {
+    const deleted = [];
+    const failed = [];
+    const waiting = [];
+    for (const resource of resourceOwnership.approvedForDeletion(environmentId)) {
+      const handler = deleteHandlers[resource.resource_type];
+      if (!handler) {
+        waiting.push(resource);
+        continue;
+      }
+      try {
+        const outcome = await handler(resource);
+        resourceOwnership.markCleanup(resource.id, {
+          status: outcome?.alreadyMissing ? "already_missing" : "cleaned",
+          note: outcome?.note ?? "Deleted after approval.",
+        });
+        deleted.push(resource);
+      } catch (error) {
+        resourceOwnership.markCleanup(resource.id, {
+          status: "failed",
+          note: error instanceof Error ? error.message : "Deletion failed.",
+        });
+        failed.push(resource);
+      }
+    }
+    return { deleted, failed, waiting };
+  }
+
+  return { runCleanup, runApprovedDeletions };
 }

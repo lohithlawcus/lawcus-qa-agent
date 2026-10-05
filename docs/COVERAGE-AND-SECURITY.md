@@ -18,7 +18,7 @@ No finite test suite proves that every case is covered or that security lapses a
 | MFA, SSO, CAPTCHA, lockout, session expiry, cookie flags | Not covered | |
 | Worker crash, restart, duplicate submission, idempotency | Covered locally | A run left running by a crash is closed at startup; run requests are idempotent (tested). |
 | Cancellation | Fixture only | The fixture runner honours a cancel between checks. |
-| Cleanup and ownership | Partial | Created records are recorded and leftovers reported (tested). Nothing is ever deleted, and nothing is deleted by name. |
+| Cleanup and ownership | Partial | Created records are recorded and leftovers reported (tested). Deletion needs a named human approval for each record, and never a name match; that approval gate is tested. No Lawcus delete action has been verified or run yet. |
 | Knowledge: source conflicts, inference promoted to fact, stale facts, circular dependencies | Partial | Weaker evidence needs a written acknowledgement to replace stronger; stale facts are listed; cycles block a plan (all tested). A second approval of the same item is refused (tested). |
 | No silent retries, no false green | Covered | See the run accounting in `ARCHITECTURE.md`. The single login retry in native checks is recorded. |
 | Billing, dates and time zones, accessibility, integrations, AI failure modes | Not covered | Only login, Contacts, Leads and one Matter flow exist. |
