@@ -947,7 +947,6 @@ export default function Home() {
               );
             })}
           </div>
-          <span className="version">V1 · Login slice</span>
         </div>
         {activeGroup.members.length > 1 && (
           <div className="sub-band">
@@ -2566,7 +2565,7 @@ export default function Home() {
               Lawcus QA Agent <span className="footer-divider">/</span> Intent
               in. Evidence out.
             </span>
-            <span>Local V1 · Bounded login testing</span>
+            <span>Runs on this Mac · Fiveriverz staging</span>
           </footer>
         </main>
       </Tabs>
