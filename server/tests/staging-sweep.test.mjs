@@ -23,6 +23,14 @@ function withApp(fn) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// A sign-in recorded under a released lease, as the live helper records one.
+function seedSignIn(db, { startedAt = new Date().toISOString(), environmentId = "lawcus" } = {}) {
+  const leaseId = randomUUID();
+  db.prepare("INSERT INTO staging_leases(id,environment_id,kind,status,acquired_at,released_at) VALUES(?,?,'run','released',?,?)").run(leaseId, environmentId, startedAt, startedAt);
+  db.prepare("INSERT INTO staging_sign_ins(id,lease_id,environment_id,purpose,attempted_at) VALUES(?,?,?,'check',?)").run(randomUUID(), leaseId, environmentId, startedAt);
+}
+
 function seedRun(db, startedAt = new Date().toISOString(), status = "passed") {
   const runbookId = randomUUID();
   db.prepare("INSERT INTO runbooks VALUES(?,?,?,?,?,?,?,?)").run(runbookId, 1, "lawcus", "t", "i", "built-in", JSON.stringify({ title: "Login essentials", scenarios: ["valid_login"] }), new Date().toISOString());
@@ -194,9 +202,11 @@ test("only one sweep may run at a time, one must say who asked, and a finished o
 test("a sweep spends the staging sign-in budget and blocks runs while it is running", async () => {
   await withApp(async ({ db, sweeps }) => {
     assert.equal(stagingBusy(db), false);
-    for (let i = 0; i < STAGING_RUN_LIMIT - 1; i++) seedRun(db);
+    for (let i = 0; i < STAGING_RUN_LIMIT - 1; i++) seedSignIn(db);
     assert.equal(checkStagingBudget(db, "lawcus").ok, true);
     const id = sweeps.begin({ environmentId: "lawcus", requestedBy: HUMAN });
+    // The sweep's own staging sign-in, as its reader records it under the lease.
+    seedSignIn(db);
     assert.equal(stagingBusy(db), true, "a running sweep blocks runs");
     assert.deepEqual([checkStagingBudget(db, "lawcus").ok, checkStagingBudget(db, "lawcus").recent], [false, STAGING_RUN_LIMIT], "the sweep counts as a sign-in");
     await sweeps.run({ sweepId: id, reader: async () => ({}) });

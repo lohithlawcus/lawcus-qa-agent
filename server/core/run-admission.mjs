@@ -7,19 +7,17 @@ export const STAGING_RUN_WINDOW_MS = 600000;
 
 export function checkStagingBudget(db, environmentId, { nowMs = Date.now(), limit = STAGING_RUN_LIMIT, windowMs = STAGING_RUN_WINDOW_MS } = {}) {
   const since = new Date(nowMs - windowMs).toISOString();
-  const runs = db
-    .prepare("SELECT COUNT(*) n FROM runs JOIN runbooks ON runbooks.id=runs.runbook_id WHERE runbooks.environment_id=? AND runs.started_at>?")
-    .get(environmentId, since).n;
-  // A sweep signs in to staging too, so it spends the same budget.
-  const sweeps = db.prepare("SELECT COUNT(*) n FROM staging_sweeps WHERE environment_id=? AND started_at>?").get(environmentId, since).n;
-  const n = runs + sweeps;
+  // Counted in sign-ins, not runs: a five-case native suite signs in five times, and every
+  // sweep, deletion and check does too. Each sign-in is recorded under its lease.
+  const n = db.prepare("SELECT COUNT(*) n FROM staging_sign_ins WHERE environment_id=? AND attempted_at>?").get(environmentId, since).n;
   return { ok: n < limit, recent: n, limit, windowMinutes: Math.round(windowMs / 60000) };
 }
 
-/** True while a run OR a sweep is using the one shared staging account. */
+/** True while any staging operation holds the lease, or a run or sweep is still marked running. */
 export function stagingBusy(db) {
   return Boolean(
-    db.prepare("SELECT 1 FROM runs WHERE status='running'").get() ||
+    db.prepare("SELECT 1 FROM staging_leases WHERE status='active'").get() ||
+      db.prepare("SELECT 1 FROM runs WHERE status='running'").get() ||
       db.prepare("SELECT 1 FROM staging_sweeps WHERE status='running'").get(),
   );
 }

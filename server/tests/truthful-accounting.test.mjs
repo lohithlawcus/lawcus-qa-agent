@@ -27,6 +27,14 @@ process.env.QA_FORBID_LIVE = "1";
 // These are the harness's own negative controls: cases where a run must NOT
 // be green (nothing executed, partial, crashed, quarantined, evidence lost).
 
+
+// A sign-in recorded under a released lease, as the live helper records one.
+function seedSignIn(db, { startedAt = new Date().toISOString(), environmentId = "lawcus" } = {}) {
+  const leaseId = randomUUID();
+  db.prepare("INSERT INTO staging_leases(id,environment_id,kind,status,acquired_at,released_at) VALUES(?,?,'run','released',?,?)").run(leaseId, environmentId, startedAt, startedAt);
+  db.prepare("INSERT INTO staging_sign_ins(id,lease_id,environment_id,purpose,attempted_at) VALUES(?,?,?,'check',?)").run(randomUUID(), leaseId, environmentId, startedAt);
+}
+
 function withApp(fn) {
   const dir = mkdtempSync(join(tmpdir(), "qa-truthful-"));
   try {
@@ -160,14 +168,14 @@ test("evidence attached to an error is invisible to JSON, inspect and enumeratio
 test("checkStagingBudget refuses at the limit, counts only the environment and only the window", () => {
   withApp(({ db }) => {
     const nowMs = Date.now();
-    seedRun(db, { startedAt: new Date(nowMs - 60_000).toISOString() });
-    seedRun(db, { startedAt: new Date(nowMs - 120_000).toISOString() });
-    seedRun(db, { startedAt: new Date(nowMs - 3_600_000).toISOString() }); // outside window
+    seedSignIn(db, { startedAt: new Date(nowMs - 60_000).toISOString() });
+    seedSignIn(db, { startedAt: new Date(nowMs - 120_000).toISOString() });
+    seedSignIn(db, { startedAt: new Date(nowMs - 3_600_000).toISOString() }); // outside window
     const otherEnv = db.prepare("SELECT id FROM environments WHERE id<>'lawcus' LIMIT 1").get().id;
-    seedRun(db, { startedAt: new Date(nowMs - 30_000).toISOString(), environmentId: otherEnv });
+    seedSignIn(db, { startedAt: new Date(nowMs - 30_000).toISOString(), environmentId: otherEnv });
     let b = checkStagingBudget(db, "lawcus", { nowMs });
     assert.deepEqual([b.ok, b.recent], [true, 2]);
-    seedRun(db, { startedAt: new Date(nowMs - 10_000).toISOString() });
+    seedSignIn(db, { startedAt: new Date(nowMs - 10_000).toISOString() });
     b = checkStagingBudget(db, "lawcus", { nowMs });
     assert.deepEqual([b.ok, b.recent], [false, 3]);
   });
@@ -370,7 +378,7 @@ test("MCP run tools obey the same staging run budget as the app", async () => {
     // No cases are seeded on purpose: if the guard were broken the suite
     // would run zero checks (and this assertion would fail) rather than run
     // anything real. runApprovedTest calls the very same ensureWithinRunBudget.
-    for (let i = 0; i < 3; i++) seedRun(db, { status: "passed" });
+    for (let i = 0; i < 3; i++) seedSignIn(db);
     await assert.rejects(
       runApprovedSuite({ db, testbook, apiContracts, mutationJournal }, { suiteName: "Create Contact - Person" }),
       (e) => e instanceof McpToolError && e.code === MCP_ERROR.RATE_LIMITED,
