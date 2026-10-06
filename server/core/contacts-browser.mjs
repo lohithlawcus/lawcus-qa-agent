@@ -693,13 +693,28 @@ async function enableClientRates(page) {
   const dialog = contactDialog(page);
   await dialog.getByText("Billing Preference", { exact: true }).first().click();
   await page.waitForTimeout(300);
-  await dialog
-    .getByText("Enable client rates", { exact: false })
-    .locator("..")
-    .locator('button[role="switch"], input[type="checkbox"]')
-    .first()
-    .click();
+  // The switch is not always a child of the label's own element. Walk up from the text
+  // until an ancestor contains a switch, mark it, and click that exact control.
+  const marked = await page.evaluate(() => {
+    const label = [...document.querySelectorAll("label, span, div, p")].find(
+      (el) => el.children.length === 0 && /Enable client rates/i.test(el.textContent || ""),
+    );
+    for (let el = label; el; el = el.parentElement) {
+      const sw = el.querySelector('[role="switch"], input[type="checkbox"]');
+      if (sw) {
+        sw.setAttribute("data-qa-client-rates", "1");
+        return true;
+      }
+    }
+    return false;
+  });
+  if (!marked) throw new Error("The Enable client rates switch was not found in the Billing Preference section.");
+  const toggle = dialog.locator('[data-qa-client-rates="1"]');
+  const isOn = () => toggle.evaluate((el) => el.getAttribute("aria-checked") === "true" || el.checked === true);
+  if (!(await isOn())) await toggle.click();
   await page.waitForTimeout(400);
+  // Never fill the fixed rate unless the switch really turned on.
+  if (!(await isOn())) throw new Error("Client rates did not turn on, so the fixed rate could not be entered.");
 }
 
 export async function verifyBillingRateRequiredValidationViaBrowser({ context }) {
