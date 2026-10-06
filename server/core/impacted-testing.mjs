@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sealEvidence } from "./setup.mjs";
-import { attachEvidence, captureStalledPage, takeEvidence } from "./evidence.mjs";
+import { attachEvidence, captureStalledPage, closeLiveContexts, takeEvidence } from "./evidence.mjs";
 import { redactText, safeErrorMessage } from "./redact.mjs";
 import { classifyThrown, classifyReportedFailure } from "./failure-class.mjs";
 import { planFromKnowledge } from "./graph-planner.mjs";
@@ -247,9 +247,23 @@ export const STALL_LIMIT_MS = 4 * 60 * 1000;
 
 // Waits for one check, but no longer than limitMs. On timeout the open page is
 // photographed and attached to the error, so the failure row carries the screen.
-export function withStallLimit(promise, limitMs = STALL_LIMIT_MS) {
-  // A check stopped by this limit must never surface as an unhandled rejection.
-  promise.catch(() => {});
+// After a stall, the open browser is closed and the check must finish shutting down
+// within this time. If it does not, the outcome is an integrity failure, not a plain failure.
+export const SHUTDOWN_LIMIT_MS = 30 * 1000;
+
+export function withStallLimit(promise, limitMs = STALL_LIMIT_MS, shutdownLimitMs = SHUTDOWN_LIMIT_MS) {
+  let stalled = null;
+  // Whatever the check reports after a stall (usually that its browser closed) is replaced
+  // by the stall error, so the failure row names the stall and carries its screenshot.
+  const guarded = promise.then(
+    (outcome) => outcome,
+    (error) => {
+      if (stalled) throw stalled;
+      throw error;
+    },
+  );
+  // A stopped check must never surface as an unhandled rejection.
+  guarded.catch(() => {});
   let timer;
   const limit = new Promise((_, reject) => {
     timer = setTimeout(async () => {
@@ -257,10 +271,17 @@ export function withStallLimit(promise, limitMs = STALL_LIMIT_MS) {
       const where = captured ? ` on ${captured.where}` : "";
       const error = new Error(`The check stopped responding after ${Math.round(limitMs / 60000)} minutes${where}.`);
       if (captured) attachEvidence(error, { screenshot: captured.screenshot });
+      stalled = error;
+      await closeLiveContexts();
+      const settled = await Promise.race([
+        promise.then(() => true, () => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), shutdownLimitMs)),
+      ]);
+      if (!settled) error.shutdownUnconfirmed = true;
       reject(error);
     }, limitMs);
   });
-  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+  return Promise.race([guarded, limit]).finally(() => clearTimeout(timer));
 }
 
 export async function executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs = 8000, artifactDirectory = null, audit = null, sealer = sealEvidence, stallLimitMs = STALL_LIMIT_MS }) {
@@ -277,6 +298,7 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
     executedAny = true;
     const startedAt = Date.now();
     let status, actual, retried = false, screenshot = null, reason = null, classification = null;
+    let shutdownUnconfirmed = false;
     try {
       const outcome = await withStallLimit(runner(), stallLimitMs);
       status = outcome.passed ? "passed" : "failed";
@@ -286,7 +308,14 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
       if (!outcome.passed) classification = classifyReportedFailure(reason ?? actual);
     } catch (error) {
       screenshot = takeEvidence(error)?.screenshot ?? null;
-      if (!LOGIN_IDENTITY_TIMEOUT_PATTERN.test(error.message)) {
+      if (error.shutdownUnconfirmed) {
+        // The check did not stop after its browser was closed. Nothing after this can be trusted to be isolated.
+        shutdownUnconfirmed = true;
+        status = "failed";
+        actual = `The check stopped responding and did not shut down within ${Math.round(SHUTDOWN_LIMIT_MS / 1000)} seconds. The run was halted.`;
+        reason = actual;
+        classification = { failureClass: "integrity", reasonCode: "shutdown_unconfirmed", explanation: "A stopped check did not shut down, so the run was halted." };
+      } else if (!LOGIN_IDENTITY_TIMEOUT_PATTERN.test(error.message)) {
         status = "failed";
         actual = `Execution error: ${safeErrorMessage(error)}`;
         reason = actual;
@@ -364,6 +393,8 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
       ...cell, executed: true, status, actual, retried, scenarioResultId, evidenceStatus,
       failureClass: classification?.failureClass ?? null, reasonCode: classification?.reasonCode ?? null, explanation: classification?.explanation ?? null,
     });
+    // Never start another check while a stopped one may still be running in the browser.
+    if (shutdownUnconfirmed) break;
   }
   return results;
 }

@@ -42,6 +42,13 @@ export function unregisterLiveContext(context) {
   liveContexts.delete(context);
 }
 
+/** Closes every open login-backed context, which ends the browser step that is running in it. */
+export async function closeLiveContexts() {
+  const open = [...liveContexts];
+  await Promise.all(open.map((context) => Promise.resolve().then(() => context.close()).catch(() => {})));
+  return open.length;
+}
+
 /** A screenshot of the most recently used open page, with that page's path
  * (never its query string) so a stalled step can be placed. Null when no
  * context is open or the capture fails. */
