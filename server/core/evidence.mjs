@@ -31,3 +31,41 @@ export async function captureScreenshot(page) {
     return null;
   }
 }
+
+// Browser contexts that are open right now. A login-backed check registers its
+// context while it runs, so a check that stops responding can still be photographed.
+const liveContexts = new Set();
+export function registerLiveContext(context) {
+  liveContexts.add(context);
+}
+export function unregisterLiveContext(context) {
+  liveContexts.delete(context);
+}
+
+/** A screenshot of the most recently used open page, with that page's path
+ * (never its query string) so a stalled step can be placed. Null when no
+ * context is open or the capture fails. */
+export async function captureStalledPage() {
+  try {
+    const pages = [...liveContexts].flatMap((context) => {
+      try {
+        return context.pages();
+      } catch {
+        return [];
+      }
+    });
+    const page = pages.at(-1);
+    if (!page) return null;
+    const screenshot = await captureScreenshot(page);
+    if (!screenshot) return null;
+    let where = "unknown page";
+    try {
+      where = new URL(page.url()).pathname;
+    } catch {
+      // keep the placeholder
+    }
+    return { screenshot, where };
+  } catch {
+    return null;
+  }
+}
