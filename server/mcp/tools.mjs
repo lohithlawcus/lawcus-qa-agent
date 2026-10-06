@@ -8,6 +8,7 @@ import { buildNativeRunners, NATIVE_SUITE_MEMBERS } from "../testbook/lawcus-nat
 import { finalizeRun } from "../core/run-outcome.mjs";
 import { closeOutCleanup } from "../core/run-cleanup.mjs";
 import { checkStagingBudget, stagingBusy } from "../core/run-admission.mjs";
+import { openStagingLeases } from "../core/staging-lease.mjs";
 import { preflightMessage } from "../core/preflight.mjs";
 import { buildCoverageReport } from "../core/coverage-report.mjs";
 import { currentCodeRevision } from "../core/code-revision.mjs";
@@ -196,6 +197,10 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
   ensureNoActiveRun(db);
   ensureWithinRunBudget(db);
   await ensurePreflight(preflight);
+  const leases = openStagingLeases(db);
+  const lease = leases.acquire({ environmentId: "lawcus", kind: "run" });
+  if (!lease.ok) throw new McpToolError(MCP_ERROR.ALREADY_RUNNING, "A test is already running. Wait for it to finish before starting another.");
+  try {
   const runId = createMcpRun(db, { title: `MCP: ${externalId}`, intent: `run_approved_test(${externalId})`, externalIds: [externalId] });
   // Re-bind now that the real runId exists, since mutation-journal entries
   // must reference it.
@@ -213,6 +218,9 @@ export async function runApprovedTest({ db, testbook, apiContracts, mutationJour
   const verdict = finalizeRun(db, runId, { results });
   const cleanup = await closeOutCleanup({ db, cleanupRunner, runId, audit });
   return { runId, outcome: verdict.outcome, cleanup: cleanup?.overall ?? "unknown", leftovers: cleanup?.leftovers.length ?? null, results };
+  } finally {
+    leases.release(lease.id);
+  }
 }
 
 /** section 41's run_approved_suite — every native case in a known suite
@@ -225,6 +233,10 @@ export async function runApprovedSuite({ db, testbook, apiContracts, mutationJou
   ensureNoActiveRun(db);
   ensureWithinRunBudget(db);
   await ensurePreflight(preflight);
+  const leases = openStagingLeases(db);
+  const lease = leases.acquire({ environmentId: "lawcus", kind: "suite_run" });
+  if (!lease.ok) throw new McpToolError(MCP_ERROR.ALREADY_RUNNING, "A test is already running. Wait for it to finish before starting another.");
+  try {
   const runId = createMcpRun(db, { title: `MCP suite: ${suiteName}`, intent: `run_approved_suite(${suiteName})`, externalIds: members });
   const runners = buildNativeRunners({ apiContracts, mutationJournal, runId, resourceOwnership });
   const plan = { cells: members.map((externalId) => {
@@ -248,6 +260,9 @@ export async function runApprovedSuite({ db, testbook, apiContracts, mutationJou
   const verdict = finalizeRun(db, runId, { results });
   const cleanup = await closeOutCleanup({ db, cleanupRunner, runId, audit });
   return { runId, outcome: verdict.outcome, cleanup: cleanup?.overall ?? "unknown", leftovers: cleanup?.leftovers.length ?? null, results };
+  } finally {
+    leases.release(lease.id);
+  }
 }
 
 export function getRunStatus({ db }, { runId }) {

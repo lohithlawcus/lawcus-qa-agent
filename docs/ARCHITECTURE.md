@@ -163,6 +163,7 @@ The service applies these in order at startup. The schema version is the highest
 | `023_failure_classes.sql` | failure class and reason code on results |
 | `024_fact_scope.sql` | fact scope |
 | `025_staging_sweeps.sql` | sweeps and their findings |
+| `026_staging_leases.sql` | one staging operation at a time per environment, and a ledger of every staging sign-in |
 
 ## Where things are
 

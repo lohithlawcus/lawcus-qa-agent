@@ -7,6 +7,7 @@ import {savePersonaState,loadPersonaState} from './persona-session.mjs';
 import {sealEvidence,saveCredentials,CredentialSetup,ENVIRONMENT_ACCOUNTS} from './setup.mjs';
 import {startEgress} from './egress.mjs';
 import {registerLiveContext,unregisterLiveContext} from './evidence.mjs';
+import {recordSignInAttempt} from './staging-lease.mjs';
 import {Plan} from './contracts.mjs';
 import {now} from './store.mjs';
 // V5 Step 10 / section 20 — these origins now live in one place
@@ -636,6 +637,8 @@ export function permitMattersRequest(url,method,resourceType,postData){
 // unchanged: same egress hosts, same timeouts, same close order. `viewport`
 // defaults to CONTACTS_VIEWPORT, the default every caller but Leads used.
 async function withLoggedInContext(permit,work,{viewport=CONTACTS_VIEWPORT}={}){
+ // Recorded before any browser or credential is touched. Refused without an active staging lease.
+ recordSignInAttempt('check');
  let browser,proxy,context;
  try{
   const creds=JSON.parse(await readSecret('lawcus-login'));if(typeof creds.username!=='string'||typeof creds.password!=='string')throw new Error('Invalid staging credentials.');

@@ -61,6 +61,7 @@ import { finalizeRun } from "./core/run-outcome.mjs";
 import { closeOutCleanup } from "./core/run-cleanup.mjs";
 import { sanitizeErrorBody, safeErrorMessage } from "./core/redact.mjs";
 import { checkStagingBudget, stagingBusy } from "./core/run-admission.mjs";
+import { openStagingLeases, bindSignInRecorder } from "./core/staging-lease.mjs";
 import { runPreflight, preflightMessage } from "./core/preflight.mjs";
 import { buildCoverageReport } from "./core/coverage-report.mjs";
 import { currentCodeRevision } from "./core/code-revision.mjs";
@@ -70,6 +71,11 @@ mkdirSync(directory, { recursive: true, mode: 0o700 });
 // Bind the fixture first so a duplicate service cannot mark active jobs interrupted.
 const fixture = await startFixture();
 const { db, audit } = openStore(directory);
+// One staging operation at a time, and every staging sign-in is recorded under it. A lease
+// still active at startup belonged to a process that has exited, so it is abandoned.
+const stagingLeases = openStagingLeases(db, audit);
+stagingLeases.abandonStale();
+bindSignInRecorder((purpose) => stagingLeases.recordSignIn({ environmentId: "lawcus", purpose }));
 const proposals = openProposals(db, audit);
 const testbook = openTestBook(db, audit);
 // V5 Step 8 — the only place that knows which provider/model handles which
@@ -709,6 +715,12 @@ const server = createServer(
           });
           return;
         }
+        const lease = stagingLeases.acquire({ environmentId: book.environment_id, kind: "run" });
+        if (!lease.ok) { json(res, 409, { error: "Another staging operation is running. Wait for it to finish before starting this one." }); return; }
+        // The lease is released on every exit. Once the run is handed to its background work,
+        // that work releases it after cleanup.
+        let handedOff = false;
+        try {
         // V5 Step 6 / section 15 — resolve and freeze the execution
         // manifest BEFORE the run exists at all: if any scenario's DSL
         // references a primitive that isn't approved and hash-matching, or
@@ -766,6 +778,7 @@ const server = createServer(
         const execute = REAL_LOGIN_ENVIRONMENTS.has(book.environment_id) ? runLive : executeRun;
         const controller = book.environment_id === "fixture" ? new AbortController() : null;
         if (controller) activeRuns.set(id, controller);
+        handedOff = true;
         void execute({
           db,
           audit,
@@ -793,9 +806,13 @@ const server = createServer(
             } catch {
               db.prepare("UPDATE runs SET cleanup_status='failed' WHERE id=?").run(id);
             }
+            stagingLeases.release(lease.id);
           });
         json(res, 202, { id });
         return;
+        } finally {
+          if (!handedOff) stagingLeases.release(lease.id);
+        }
       }
       const cancel = /^\/runs\/([a-f0-9-]{36})\/cancel$/.exec(pathname);
       if (req.method === "POST" && cancel) {
@@ -954,10 +971,18 @@ const server = createServer(
             if (!sweepBudget.ok) { json(res, 429, { error: "Three staging sign-ins were used in ten minutes. Please wait before sweeping." }); return; }
             const sweepPre = await runPreflight({ artifactDirectory });
             if (!sweepPre.ok) { json(res, 409, { error: preflightMessage(sweepPre), preflight: sweepPre.checks }); return; }
-            const sweepId = stagingSweeps.begin({ environmentId: "lawcus", requestedBy: approverIdentity });
-            void stagingSweeps.run({ sweepId, reader: ({ cutoff }) => runStagingSweepRead({ cutoff }) });
-            json(res, 202, { sweepId });
-            return;
+            const lease = stagingLeases.acquire({ environmentId: "lawcus", kind: "sweep" });
+            if (!lease.ok) { json(res, 409, { error: "Another staging operation is running. Wait for it to finish before sweeping." }); return; }
+            let handedOff = false;
+            try {
+              const sweepId = stagingSweeps.begin({ environmentId: "lawcus", requestedBy: approverIdentity });
+              handedOff = true;
+              void stagingSweeps.run({ sweepId, reader: ({ cutoff }) => runStagingSweepRead({ cutoff }) }).finally(() => stagingLeases.release(lease.id));
+              json(res, 202, { sweepId });
+              return;
+            } finally {
+              if (!handedOff) stagingLeases.release(lease.id);
+            }
           }
           let hit;
           if (req.method === "GET" && (hit = /^\/sweeps\/([a-f0-9-]{36})$/.exec(pathname))) {
@@ -1147,6 +1172,9 @@ const server = createServer(
         const impactedPre = await runPreflight({ artifactDirectory });
         if (!impactedPre.ok) { json(res, 409, { error: preflightMessage(impactedPre), preflight: impactedPre.checks }); return; }
 
+        const lease = stagingLeases.acquire({ environmentId: "lawcus", kind: "impacted_run" });
+        if (!lease.ok) { json(res, 409, { error: "Another staging operation is running. Wait for it to finish before starting this one." }); return; }
+        try {
         const runbookId = randomUUID();
         db.prepare("INSERT INTO runbooks VALUES(?,?,?,?,?,?,?,?)").run(
           runbookId, 1, "lawcus", `Impacted test: ${plan.subjectFeatureName}`, input.intent, "impacted-testing",
@@ -1177,6 +1205,9 @@ const server = createServer(
         audit("impacted_test.completed", runId, { results: results.length, filedProposals: filedProposals.length });
         json(res, 200, { runId, plan, results, filedProposals });
         return;
+        } finally {
+          stagingLeases.release(lease.id);
+        }
       }
       if (req.method === "GET" && pathname === "/leftovers") {
         json(res, 200, { leftovers: resourceOwnership.allLeftovers().map(withOpenUrl) });
@@ -1236,6 +1267,8 @@ const server = createServer(
         const budget = checkStagingBudget(db, "lawcus");
         const recentDeletions = db.prepare("SELECT COUNT(*) n FROM audit_events WHERE action='deletion.run' AND created_at>?").get(new Date(Date.now() - 600000).toISOString()).n;
         if (!budget.ok || budget.recent + recentDeletions >= budget.limit) { json(res, 429, { error: "Three staging sign-ins were used in ten minutes. Please wait before deleting." }); return; }
+        const lease = stagingLeases.acquire({ environmentId: "lawcus", kind: "deletion" });
+        if (!lease.ok) { json(res, 409, { error: "Another staging operation is running. Nothing was deleted." }); return; }
         deletionInFlight = true;
         try {
           const result = await cleanupRunner.runApprovedDeletions({ environmentId: "lawcus", limit: 1, ownershipId, deleteHandlers: lawcusDeleteHandlers() });
@@ -1252,6 +1285,7 @@ const server = createServer(
           });
         } finally {
           deletionInFlight = false;
+          stagingLeases.release(lease.id);
         }
         return;
       }
