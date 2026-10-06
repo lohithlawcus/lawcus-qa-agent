@@ -6,6 +6,7 @@ import {readSecret} from './secrets.mjs';
 import {savePersonaState,loadPersonaState} from './persona-session.mjs';
 import {sealEvidence,saveCredentials,CredentialSetup,ENVIRONMENT_ACCOUNTS} from './setup.mjs';
 import {startEgress} from './egress.mjs';
+import {registerLiveContext,unregisterLiveContext} from './evidence.mjs';
 import {Plan} from './contracts.mjs';
 import {now} from './store.mjs';
 // V5 Step 10 / section 20 — these origins now live in one place
@@ -641,6 +642,7 @@ async function withLoggedInContext(permit,work,{viewport=CONTACTS_VIEWPORT}={}){
   proxy=await startEgress(['lohith.fiveriverz.com','api.fiveriverz.com','daewtpgqtk7am.cloudfront.net']);
   browser=await launch(proxy,false);
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,viewport});
+  registerLiveContext(context);
   // Bumped from 20000 -> 35000 (2026-09-16): two real staging runs each showed
   // the FIRST real login of a rapid back-to-back batch timing out waiting for
   // the post-login identity check, while every login right after it (same
@@ -660,7 +662,7 @@ async function withLoggedInContext(permit,work,{viewport=CONTACTS_VIEWPORT}={}){
   await page.close();
   return await work(context);
  }finally{
-  await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
+  unregisterLiveContext(context);await context?.close().catch(()=>{});await browser?.close().catch(()=>{});await proxy?.close().catch(()=>{});
  }
 }
 const withLoggedInMatterContext=work=>withLoggedInContext(permitMattersRequest,work);

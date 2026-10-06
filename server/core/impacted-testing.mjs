@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sealEvidence } from "./setup.mjs";
-import { takeEvidence } from "./evidence.mjs";
+import { attachEvidence, captureStalledPage, takeEvidence } from "./evidence.mjs";
 import { redactText, safeErrorMessage } from "./redact.mjs";
 import { classifyThrown, classifyReportedFailure } from "./failure-class.mjs";
 import { planFromKnowledge } from "./graph-planner.mjs";
@@ -242,7 +242,28 @@ export function proposeGapCoverage({ proposals, plan, generatedBy = "impacted_te
  */
 const LOGIN_IDENTITY_TIMEOUT_PATTERN = /getByPlaceholder\('Search your practice'/;
 
-export async function executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs = 8000, artifactDirectory = null, audit = null, sealer = sealEvidence }) {
+// A case that has not reported after this long is stopped, photographed and recorded as a failure.
+export const STALL_LIMIT_MS = 4 * 60 * 1000;
+
+// Waits for one check, but no longer than limitMs. On timeout the open page is
+// photographed and attached to the error, so the failure row carries the screen.
+export function withStallLimit(promise, limitMs = STALL_LIMIT_MS) {
+  // A check stopped by this limit must never surface as an unhandled rejection.
+  promise.catch(() => {});
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(async () => {
+      const captured = await captureStalledPage();
+      const where = captured ? ` on ${captured.where}` : "";
+      const error = new Error(`The check stopped responding after ${Math.round(limitMs / 60000)} minutes${where}.`);
+      if (captured) attachEvidence(error, { screenshot: captured.screenshot });
+      reject(error);
+    }, limitMs);
+  });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+}
+
+export async function executeImpactedTest({ plan, runners, db, runId, testbook, delayBetweenRunsMs = 8000, artifactDirectory = null, audit = null, sealer = sealEvidence, stallLimitMs = STALL_LIMIT_MS }) {
   const results = [];
   let executedAny = false;
   for (const cell of plan.cells) {
@@ -257,7 +278,7 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
     const startedAt = Date.now();
     let status, actual, retried = false, screenshot = null, reason = null, classification = null;
     try {
-      const outcome = await runner();
+      const outcome = await withStallLimit(runner(), stallLimitMs);
       status = outcome.passed ? "passed" : "failed";
       actual = outcome.actual;
       screenshot = outcome.screenshot ?? null;
@@ -273,7 +294,7 @@ export async function executeImpactedTest({ plan, runners, db, runId, testbook, 
       } else {
         retried = true;
         try {
-          const outcome = await runner();
+          const outcome = await withStallLimit(runner(), stallLimitMs);
           status = outcome.passed ? "passed" : "failed";
           actual = `(retried once after the first login timed out) ${outcome.actual}`;
           screenshot = outcome.screenshot ?? null;
