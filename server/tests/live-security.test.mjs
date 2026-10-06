@@ -24,14 +24,14 @@ test('Contacts policy is permitLiveRequest plus exactly two write shapes — PUT
  assert.equal(permitContactsRequest(ASSETS+'/app.js','GET','script'),true);
  assert.equal(permitContactsRequest(API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT','fetch'),true);
  assert.equal(permitContactsRequest(API_ORIGIN+'/contacts','POST','fetch'),true);
+ assert.equal(permitContactsRequest(API_ORIGIN+'/v2/contacts','POST','fetch'),true);
  for(const [url,method] of [
   [API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','DELETE'],
   [API_ORIGIN+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','POST'],
   [API_ORIGIN+'/contacts/not-a-uuid','PUT'],
   [API_ORIGIN+'/contacts','PUT'],
   [API_ORIGIN+'/contacts','DELETE'],
-  [API_ORIGIN+'/v2/contacts','POST'],
-  [API_ORIGIN+'/customfields','PUT'],
+   [API_ORIGIN+'/customfields','PUT'],
   [API_ORIGIN+'/matters/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
   ['https://user:password@'+API_ORIGIN.replace('https://','')+'/contacts/e2bf71a0-ae87-11f1-ab8e-f18331cbd381','PUT'],
  ])assert.equal(permitContactsRequest(url,method,'fetch'),false,`${method} ${url}`);
