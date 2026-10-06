@@ -227,3 +227,60 @@ test("runApprovedDeletions with a limit carries out only that many approved dele
     assert.equal(db.prepare("SELECT cleanup_status FROM resource_ownership WHERE id=?").get(second.id).cleanup_status, "pending");
   });
 });
+
+// P0-1 (exact-record deletion): the record the operator confirmed is the only one that can be deleted.
+test("an exact record id deletes only that record, even when an earlier approved record has no handler", async () => {
+  await withEnv(async ({ db, resourceOwnership, cleanup }) => {
+    const runId = seedRun(db);
+    const earlierMatter = resourceOwnership.recordCreated({
+      runId, environmentId: "lawcus", resourceType: "matter", resourceId: randomUUID(),
+      createdByPrimitive: "lawcus.matters.create", displayName: "QA Agent matter", cleanupPolicy: "manual",
+    });
+    const confirmed = ownContact(resourceOwnership, runId);
+    resourceOwnership.approveDeletion(earlierMatter.id, { approver: HUMAN });
+    resourceOwnership.approveDeletion(confirmed.id, { approver: HUMAN });
+    const calls = [];
+    const result = await cleanup.runApprovedDeletions({
+      environmentId: "lawcus",
+      ownershipId: confirmed.id,
+      deleteHandlers: { contact: async (r) => { calls.push(r.id); return { note: "deleted" }; } },
+    });
+    assert.deepEqual(calls, [confirmed.id]);
+    assert.equal(result.deleted.length, 1);
+    assert.equal(result.refused, null);
+    assert.equal(resourceOwnership.approvedForDeletion("lawcus").some((r) => r.id === earlierMatter.id), true);
+  });
+});
+
+test("an exact record id that is no longer approved is refused and nothing else is deleted", async () => {
+  await withEnv(async ({ db, resourceOwnership, cleanup }) => {
+    const runId = seedRun(db);
+    const other = ownContact(resourceOwnership, runId);
+    const revoked = ownContact(resourceOwnership, runId);
+    resourceOwnership.approveDeletion(other.id, { approver: HUMAN });
+    const calls = [];
+    const result = await cleanup.runApprovedDeletions({
+      environmentId: "lawcus",
+      ownershipId: revoked.id,
+      deleteHandlers: { contact: async (r) => { calls.push(r.id); return {}; } },
+    });
+    assert.equal(result.refused.reason, "not_approved");
+    assert.deepEqual(calls, []);
+    assert.equal(resourceOwnership.approvedForDeletion("lawcus").some((r) => r.id === other.id), true);
+  });
+});
+
+test("an exact record whose type has no handler is refused and stays approved and pending", async () => {
+  await withEnv(async ({ db, resourceOwnership, cleanup }) => {
+    const runId = seedRun(db);
+    const matter = resourceOwnership.recordCreated({
+      runId, environmentId: "lawcus", resourceType: "matter", resourceId: randomUUID(),
+      createdByPrimitive: "lawcus.matters.create", displayName: "QA Agent matter", cleanupPolicy: "manual",
+    });
+    resourceOwnership.approveDeletion(matter.id, { approver: HUMAN });
+    const result = await cleanup.runApprovedDeletions({ environmentId: "lawcus", ownershipId: matter.id, deleteHandlers: {} });
+    assert.equal(result.refused.reason, "no_handler");
+    assert.equal(result.deleted.length, 0);
+    assert.equal(resourceOwnership.approvedForDeletion("lawcus").some((r) => r.id === matter.id), true);
+  });
+});

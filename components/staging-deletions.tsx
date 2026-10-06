@@ -63,14 +63,15 @@ export function StagingDeletions() {
     }
   }
 
-  // The server deletes the oldest approved record, the same one shown first here.
+  // The exact record shown here is the one sent to the server; the server never chooses another.
   const next = list.approved[0];
   async function runNext() {
+    if (!next) return;
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const result = await request<{ deleted: number; failed: number; message: string | null }>("/deletions/run", {});
+      const result = await request<{ deleted: number; failed: number; message: string | null }>("/deletions/run", { ownershipId: next.id });
       if (result.deleted > 0) setNotice("Deleted from Lawcus and recorded.");
       else setError(result.message ?? "Nothing was deleted. The record stays approved.");
       setArmed(false);
