@@ -102,12 +102,13 @@ test("the Matter write policy adds exactly POST /matters to the Contacts policy 
   const api = "https://api.fiveriverz.com";
   const allowed = [
     ["POST", `${api}/matters`], ["POST", `${api}/contacts`], ["GET", `${api}/matters/e00e63a0-b910-11f1-9233-8f4d656309bc`],
+    ["POST", `${api}/v2/matters`],
   ];
   for (const [method, url] of allowed) assert.equal(permitMattersRequest(url, method, "fetch", null), true, `${method} ${url}`);
   assert.equal(permitMattersRequest(`${api}/search/contacts`, "POST", "fetch", JSON.stringify({ params: { terms: "x" }, pagination: { skip: 0, take: 10 } })), true);
   const refused = [
     ["PUT", `${api}/settings/user`], ["POST", `${api}/matters/e00e63a0-b910-11f1-9233-8f4d656309bc`], ["PUT", `${api}/matters`],
-    ["DELETE", `${api}/matters/e00e63a0-b910-11f1-9233-8f4d656309bc`], ["POST", `${api}/v2/matters`], ["POST", `${api}/leads`],
+    ["DELETE", `${api}/matters/e00e63a0-b910-11f1-9233-8f4d656309bc`], ["POST", `${api}/leads`],
     ["POST", "https://evil.example/matters"], ["POST", "http://api.fiveriverz.com/matters"], ["POST", `${api}:8443/matters`],
     ["POST", `${api}/matters/../contacts`.replace("/../contacts", "/x")],
   ];

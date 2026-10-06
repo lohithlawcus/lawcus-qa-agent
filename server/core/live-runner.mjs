@@ -56,8 +56,12 @@ export function permitLiveRequest(url,method,resourceType,origins=ENVIRONMENT_OR
 // shape — PUT to /contacts/:uuid — matching the real lawcus.contacts.update
 // contract's path template. Kept separate from permitLiveRequest so the
 // login test suite's own policy is never silently widened by this.
+// Approved 2026-10-06: the Contacts and Matters screens load their lists with these read-only
+// POSTs. Only these exact paths; the sweep and login policies do not get them.
+const APPROVED_LIST_READS=new Set(['/v2/contacts','/v2/matters','/releases/list']);
 export function permitContactsRequest(url,method,resourceType,postData){
  if(permitLiveRequest(url,method,resourceType))return true;
+ {let r;try{r=new URL(url);}catch{r=null;}if(r&&r.protocol==='https:'&&!r.username&&!r.password&&!r.port&&r.origin===API_ORIGIN&&method==='POST'&&APPROVED_LIST_READS.has(r.pathname))return true;}
  let u;try{u=new URL(url);}catch{return false;}
  if(u.protocol!=='https:'||u.username||u.password||u.port||u.origin!==API_ORIGIN)return false;
  if(method==='PUT')return /^\/contacts\/[a-f0-9-]{36}$/.test(u.pathname);
