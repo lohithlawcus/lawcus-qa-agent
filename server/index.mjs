@@ -1226,9 +1226,11 @@ const server = createServer(
       // Refused while another staging operation runs, while the preflight fails, or
       // when the shared sign-in budget is spent (deletions count as sign-ins).
       if (req.method === "POST" && pathname === "/deletions/run") {
+        // The operator names the exact record confirmed on screen; the server never picks one itself.
+        const { ownershipId } = z.object({ ownershipId: z.string().uuid() }).strict().parse(await body(req));
         if (deletionInFlight) { json(res, 409, { error: "A deletion is already running." }); return; }
         if (connecting() || savingCredentials || checkingBrowser || stagingBusy(db)) { json(res, 409, { error: "Wait for the active operation to finish before deleting." }); return; }
-        if (resourceOwnership.approvedForDeletion("lawcus").length === 0) { json(res, 409, { error: "Nothing is approved for deletion." }); return; }
+        if (!resourceOwnership.approvedForDeletion("lawcus").some((r) => r.id === ownershipId)) { json(res, 409, { error: "That record is no longer approved for deletion. Nothing was deleted." }); return; }
         const pre = await runPreflight({ artifactDirectory });
         if (!pre.ok) { json(res, 409, { error: preflightMessage(pre) }); return; }
         const budget = checkStagingBudget(db, "lawcus");
@@ -1236,9 +1238,13 @@ const server = createServer(
         if (!budget.ok || budget.recent + recentDeletions >= budget.limit) { json(res, 429, { error: "Three staging sign-ins were used in ten minutes. Please wait before deleting." }); return; }
         deletionInFlight = true;
         try {
-          const result = await cleanupRunner.runApprovedDeletions({ environmentId: "lawcus", limit: 1, deleteHandlers: lawcusDeleteHandlers() });
-          audit("deletion.run", approverIdentity, { deleted: result.deleted.length, failed: result.failed.length, waiting: result.waiting.length });
+          const result = await cleanupRunner.runApprovedDeletions({ environmentId: "lawcus", limit: 1, ownershipId, deleteHandlers: lawcusDeleteHandlers() });
+          const target = result.deleted[0] ?? result.failed[0] ?? result.waiting[0] ?? null;
+          audit("deletion.run", approverIdentity, { ownershipId, resourceId: target?.resource_id ?? null, deleted: result.deleted.length, failed: result.failed.length, waiting: result.waiting.length, refused: result.refused?.reason ?? null });
+          if (result.refused) { json(res, 409, { deleted: 0, failed: 0, waiting: result.waiting.length, ownershipId, refused: result.refused.reason, message: result.refused.reason === "no_handler" ? "This kind of record cannot be deleted by the tool yet. It stays approved and nothing was deleted." : "That record is no longer approved. Nothing was deleted." }); return; }
           json(res, 200, {
+            ownershipId,
+            resourceId: target?.resource_id ?? null,
             deleted: result.deleted.length,
             failed: result.failed.length,
             waiting: result.waiting.length,

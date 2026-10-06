@@ -86,12 +86,23 @@ export function createCleanupRunner({ resourceOwnership, mutationJournal, resour
    * approved and pending — not marked skipped — so the approval waits for a
    * handler instead of being consumed. Each delete is recorded on its own
    * row; one failure does not stop the rest. */
-  async function runApprovedDeletions({ deleteHandlers = {}, environmentId = null, limit = Infinity }) {
+  // ownershipId names the one record the operator confirmed. When it is given, nothing
+  // else is considered: if that record is not approved, or has no handler, the run is
+  // refused and the record stays pending. It never falls through to another record.
+  async function runApprovedDeletions({ deleteHandlers = {}, environmentId = null, limit = Infinity, ownershipId = null }) {
     const deleted = [];
     const failed = [];
     const waiting = [];
     let attempted = 0;
-    for (const resource of resourceOwnership.approvedForDeletion(environmentId)) {
+    const approved = resourceOwnership.approvedForDeletion(environmentId);
+    if (ownershipId !== null) {
+      const exact = approved.find((resource) => resource.id === ownershipId);
+      if (!exact) return { deleted, failed, waiting, refused: { reason: "not_approved", ownershipId } };
+      if (!deleteHandlers[exact.resource_type])
+        return { deleted, failed, waiting: [exact], refused: { reason: "no_handler", ownershipId, resourceId: exact.resource_id } };
+      approved.splice(0, approved.length, exact);
+    }
+    for (const resource of approved) {
       if (attempted >= limit) break;
       const handler = deleteHandlers[resource.resource_type];
       if (!handler) {
@@ -114,7 +125,7 @@ export function createCleanupRunner({ resourceOwnership, mutationJournal, resour
         failed.push(resource);
       }
     }
-    return { deleted, failed, waiting };
+    return { deleted, failed, waiting, refused: null };
   }
 
   return { runCleanup, runApprovedDeletions };
